@@ -1,28 +1,131 @@
-use linfa::Float;
-use crate::DecisionTreeValidParams;
+use linfa::{Float, Label, ParamGuard};
+use crate::{DecisionTreeValidParams, DecisionTree, RandomForestClassifier};
 
+#[cfg(feature = "serde")]
+use serde_crate::{Deserialize, Serialize};
+
+#[cfg_attr(
+    feature = "serde",
+    derive(Serialize, Deserialize),
+    serde(crate = "serde_crate")
+)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum MaxFeatures {
+    Sqrt,
+    Log2,
+    Int(usize),
+    None
+}
+
+#[cfg_attr(
+    feature = "serde",
+    derive(Serialize, Deserialize),
+    serde(crate = "serde_crate")
+)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RandomForestValidParams<F, L> {
-    trees_parameters: DecisionTreeValidParams<F, L>,
-    num_trees: i32, // number of estimators
+    trees_params: DecisionTreeValidParams<F, L>,
+    num_trees: usize, // number of estimators
     bootstrap: bool, // is bootstrapping enabled
     oob_score: bool, // is oob score enabled
-    max_samples: Option<f32>, // number of samples to bootstrap
+    max_samples: Option<usize>, // number of samples to bootstrap
+    max_features: MaxFeatures // number of features to bootstrap
 }
 
-impl<F: Float, L> RandomForestValidParams<F, L> {
-    pub fn set_trees_parameters(&mut self, trees_parameters: DecisionTreeValidParams<F, L>) {
-        self.trees_parameters = trees_parameters;
+impl<F: Float, L: Label> RandomForestValidParams<F, L> {
+    pub fn trees_params(&self) -> DecisionTreeValidParams<F, L> {
+        self.trees_params.clone()
     }
-    pub fn set_num_trees(&mut self, num_trees: i32) {
-        self.num_trees = num_trees;
+
+    pub fn num_trees(&self) -> usize {
+        self.num_trees
     }
-    pub fn set_bootstrap(&mut self, bootstrap: bool) {
-        self.bootstrap = bootstrap;
+
+    pub fn bootstrap(&self) -> bool {
+        self.bootstrap
     }
-    pub fn set_oob_score(&mut self, oob_score: bool) {
-        self.oob_score = oob_score;
+
+    pub fn oob_score(&self) -> bool {
+        self.oob_score
     }
-    pub fn set_max_samples(&mut self, max_samples: Option<f32>) {
-        self.max_samples = max_samples;
+
+    pub fn max_samples(&self) -> Option<usize> {
+        self.max_samples
+    }
+
+    pub fn max_features(&self) -> MaxFeatures {
+        self.max_features
     }
 }
+
+#[cfg_attr(
+    feature = "serde",
+    derive(Serialize, Deserialize),
+    serde(crate = "serde_crate")
+)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RandomForestParams<F, L> (RandomForestValidParams<F, L>);
+
+impl<F: Float, L: Label> RandomForestParams<F, L> {
+    pub fn new() -> Self {
+        Self(RandomForestValidParams {
+            trees_params: DecisionTree::params().check_ref().unwrap().clone(),
+            num_trees: 100,
+            bootstrap: true,
+            oob_score: false,
+            max_samples: None,
+            max_features: MaxFeatures::Sqrt
+        })
+    }
+
+    pub fn trees_params(mut self, trees_params: DecisionTreeValidParams<F, L>) -> Self {
+        self.0.trees_params = trees_params;
+        self
+    }
+
+    pub fn num_trees(mut self, num_trees: usize) -> Self {
+        self.0.num_trees = num_trees;
+        self
+    }
+
+    pub fn bootstrap(mut self, bootstrap: bool) -> Self {
+        self.0.bootstrap = bootstrap;
+        self
+    }
+
+    pub fn oob_score(mut self, oob_score: bool) -> Self {
+        self.0.oob_score = oob_score;
+        self
+    }
+
+    pub fn max_samples(mut self, max_samples: Option<usize>) -> Self {
+        self.0.max_samples = max_samples;
+        self
+    }
+
+    pub fn max_features(mut self, max_features: MaxFeatures) -> Self {
+        self.0.max_features = max_features;
+        self
+    }
+}
+
+impl<F: Float, L: Label> Default for RandomForestParams<F, L> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<F: Float, L: Label> RandomForestClassifier<F, L> {
+    pub fn params() -> RandomForestParams<F, L> {
+        RandomForestParams::new()
+    }
+}
+
+// impl<F: Float, L> ParamGuard for RandomForestParams<F, L> {
+//     type Checked = RandomForestValidParams<F, L>;
+//     type Error = Error;
+
+//     fn check_ref(&self) -> Result<&Self::Checked>{}
+
+//     fn check(&self) {}
+// }
