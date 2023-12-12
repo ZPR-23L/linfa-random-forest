@@ -18,6 +18,8 @@
 //!
 
 mod decision_trees;
+mod random_forest;
 
 pub use decision_trees::*;
+pub use random_forest::*;
 pub use linfa::error::Result;
