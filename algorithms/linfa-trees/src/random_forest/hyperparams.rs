@@ -1,4 +1,4 @@
-use linfa::{Float, Label, ParamGuard};
+use linfa::{error::{Error, Result}, Float, Label, ParamGuard};
 use crate::{DecisionTreeValidParams, DecisionTree, RandomForestClassifier};
 
 #[cfg(feature = "serde")]
@@ -9,11 +9,11 @@ use serde_crate::{Deserialize, Serialize};
     derive(Serialize, Deserialize),
     serde(crate = "serde_crate")
 )]
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MaxFeatures {
     Sqrt,
     Log2,
-    Int(usize),
+    Float(f32),
     None
 }
 
@@ -28,7 +28,7 @@ pub struct RandomForestValidParams<F, L> {
     num_trees: usize, // number of estimators
     bootstrap: bool, // is bootstrapping enabled
     oob_score: bool, // is oob score enabled
-    max_samples: Option<usize>, // number of samples to bootstrap
+    max_samples: Option<f32>, // number of samples to bootstrap
     max_features: MaxFeatures // number of features to bootstrap
 }
 
@@ -49,7 +49,7 @@ impl<F: Float, L: Label> RandomForestValidParams<F, L> {
         self.oob_score
     }
 
-    pub fn max_samples(&self) -> Option<usize> {
+    pub fn max_samples(&self) -> Option<f32> {
         self.max_samples
     }
 
@@ -69,7 +69,7 @@ pub struct RandomForestParams<F, L> (RandomForestValidParams<F, L>);
 impl<F: Float, L: Label> RandomForestParams<F, L> {
     pub fn new() -> Self {
         Self(RandomForestValidParams {
-            trees_params: DecisionTree::params().check_ref().unwrap().clone(),
+            trees_params: DecisionTree::params().check().unwrap(),
             num_trees: 100,
             bootstrap: true,
             oob_score: false,
@@ -98,7 +98,7 @@ impl<F: Float, L: Label> RandomForestParams<F, L> {
         self
     }
 
-    pub fn max_samples(mut self, max_samples: Option<usize>) -> Self {
+    pub fn max_samples(mut self, max_samples: Option<f32>) -> Self {
         self.0.max_samples = max_samples;
         self
     }
@@ -121,11 +121,36 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
     }
 }
 
-// impl<F: Float, L> ParamGuard for RandomForestParams<F, L> {
-//     type Checked = RandomForestValidParams<F, L>;
-//     type Error = Error;
+impl<F: Float, L> ParamGuard for RandomForestParams<F, L> {
+    type Checked = RandomForestValidParams<F, L>;
+    type Error = Error;
 
-//     fn check_ref(&self) -> Result<&Self::Checked>{}
+    fn check_ref(&self) -> Result<&Self::Checked> {
+        if let MaxFeatures::Float(value) = self.0.max_features {
+            if value > 0.0 && value < 1.0 {
+                return Ok(&self.0);
+            } else {
+                return Err(Error::Parameters(format!(
+                    "Max features should be in range (0, 1), but was {}",
+                    value
+                )));
+            }
+        }
+        if let Some(value) = self.0.max_samples {
+            if value > 0.0 && value < 1.0 {
+                return Ok(&self.0);
+            } else {
+                return Err(Error::Parameters(format!(
+                    "Max samples should be in range (0, 1), but was {}",
+                    value
+                )));
+            }
+        }
+        Ok(&self.0)
+    }
 
-//     fn check(&self) {}
-// }
+    fn check(self) -> Result<Self::Checked> {
+        self.check_ref()?;
+        Ok(self.0)
+    }
+}
