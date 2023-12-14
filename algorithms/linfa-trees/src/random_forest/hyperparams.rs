@@ -128,23 +128,23 @@ impl<F: Float, L> ParamGuard for RandomForestParams<F, L> {
 
     fn check_ref(&self) -> Result<&Self::Checked> {
         if let MaxFeatures::Float(value) = self.0.max_features {
-            if value > 0.0 && value < 1.0 {
-                return Ok(&self.0);
+            return if value > 0.0 && value < 1.0 {
+                Ok(&self.0)
             } else {
-                return Err(Error::Parameters(format!(
+                Err(Error::Parameters(format!(
                     "Max features should be in range (0, 1), but was {}",
                     value
-                )));
+                )))
             }
         }
         if let Some(value) = self.0.max_samples {
-            if value > 0.0 && value < 1.0 {
-                return Ok(&self.0);
+            return if value > 0.0 && value < 1.0 {
+                Ok(&self.0)
             } else {
-                return Err(Error::Parameters(format!(
+                Err(Error::Parameters(format!(
                     "Max samples should be in range (0, 1), but was {}",
                     value
-                )));
+                )))
             }
         }
         Ok(&self.0)

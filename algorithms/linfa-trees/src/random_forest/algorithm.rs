@@ -5,37 +5,35 @@ use linfa::{
     dataset::{Labels, AsSingleTargets},
     error::Error,
     error::Result,
-    traits::*,
     DatasetBase, Float, Label,
 };
 use linfa::prelude::Fit;
 use linfa::traits::{PredictInplace, Predict};
-use crate::{DecisionTree, DecisionTreeParams, RandomForestValidParams};
+use crate::{DecisionTree, RandomForestValidParams};
 
 pub struct RandomForestClassifier<F: Float, L: Label> {
     trees: Vec<DecisionTree<F, L>>, // collection of fitted decision trees of the forest
     oob_score: Option<f32>
 }
 
-impl<F, L, D, T> RandomForestClassifier<F, L> {
+impl<F: Float, L: Label> RandomForestClassifier<F, L> {
     fn calculate_oob_score() -> Option<f32> {
         // TODO implement
         // TODO correct function signature
-        Float::default()
+        None
     }
-    fn bootstrap(&self, dataset: &DatasetBase<ArrayBase<D, Ix2>, T>, num_trees: i32,
-                 max_samples: i32) -> Vec<&DatasetBase<ArrayBase<D, Ix2>, T>>
-        where
-            D: Data<Elem = F>,
-            T: AsSingleTargets<Elem = L> + Labels<Elem = L> {
+
+    fn bootstrap<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(dataset: &DatasetBase<ArrayBase<D, Ix2>, T>, num_trees: usize,
+                             max_samples: f32) -> Vec<&DatasetBase<ArrayBase<D, Ix2>, T>> {
         // TODO implement
         Vec::default()
     }
-    fn build_trees() -> Vec<DecisionTree<F, T>> {
+    fn build_trees<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>() -> Vec<DecisionTree<F, L>> {
         // TODO implement
         Vec::default()
     }
 }
+
 
 impl<'a, F: Float, L: Label + 'a + std::fmt::Debug, D, T> Fit<ArrayBase<D, Ix2>, T, Error>
 for RandomForestValidParams<F, L>
@@ -50,32 +48,40 @@ for RandomForestValidParams<F, L>
         // TODO extend implementation
         // This is a draft - many things may be changed or added
 
-        if !self.bootstrap && self.oob_score {
-            Err("OOB score is available only with bootstrap")
+        if !self.bootstrap() && self.oob_score() {
+            // Err(Error::Parameters(format!("Max samples should be in range (0, 1)")))
         }
 
-        let mut fitted_trees: Vec<DecisionTree<F, T>> = Vec::new();
-        if self.bootstrap {
-            let samples = self.bootstrap(dataset, self.num_trees, self.max_samples.unwrap());
+        let mut fitted_trees: Vec<DecisionTree<F, L>> = Vec::new();
+        if self.bootstrap() {
+            let samples = RandomForestClassifier::bootstrap(dataset, self.num_trees(), self.max_samples().unwrap());
             for sample in samples {
-                let tree = DecisionTreeParams::from(DecisionTreeParams(
-                    self.trees_parameters.clone()
-                )).fit(sample);
+                let tree = DecisionTree::params()
+                    .split_quality(self.trees_params().split_quality())
+                    .max_depth(self.trees_params().max_depth())
+                    .min_weight_split(self.trees_params().min_weight_split())
+                    .min_weight_leaf(self.trees_params().min_weight_leaf())
+                    .min_impurity_decrease(self.trees_params().min_impurity_decrease())
+                    .fit(sample);
                 fitted_trees.push(tree.unwrap())
             }
         }
         else {
-            for num_tree in 0..self.num_trees {
-                let tree = DecisionTreeParams::from(DecisionTreeParams(
-                    self.trees_parameters.clone()
-                )).fit(dataset);
+            for _num_tree in 0..self.num_trees() {
+                let tree = DecisionTree::params()
+                    .split_quality(self.trees_params().split_quality())
+                    .max_depth(self.trees_params().max_depth())
+                    .min_weight_split(self.trees_params().min_weight_split())
+                    .min_weight_leaf(self.trees_params().min_weight_leaf())
+                    .min_impurity_decrease(self.trees_params().min_impurity_decrease())
+                    .fit(dataset);
                 fitted_trees.push(tree.unwrap())
             }
         }
 
         let oob_score ;
-        if self.oob_score {
-            oob_score = RandomForestClassifier::calculate_oob_score()
+        if self.oob_score() {
+            oob_score = RandomForestClassifier::<F, L>::calculate_oob_score()
         }
         else { oob_score = None }
 
@@ -120,7 +126,7 @@ for RandomForestClassifier<F, L>
     }
 }
 
-fn most_common<L:  std::hash::Hash + std::cmp::Eq>(targets: &[L]) -> &L {
+fn most_common<L: std::hash::Hash + Eq>(targets: &[L]) -> &L {
     let mut map = HashMap::new();
     for target in targets {
         let counter = map.entry(target).or_insert(0);
