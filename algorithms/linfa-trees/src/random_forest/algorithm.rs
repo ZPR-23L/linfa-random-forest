@@ -1,23 +1,55 @@
+use std::collections::HashMap;
+
 use ndarray::{Array1, ArrayBase, Data, Ix2};
 use linfa::{Float, Label};
-use linfa::traits::PredictInplace;
+use linfa::traits::{PredictInplace, Predict};
 use crate::DecisionTree;
 
 pub struct RandomForestClassifier<F: Float, L: Label> {
-    _trees: Vec<DecisionTree<F, L>>, // collection of fitted decision trees of the forest
+    trees: Vec<DecisionTree<F, L>>, // collection of fitted decision trees of the forest
 }
 
-impl<F: Float, L: Label + Default, D: Data<Elem = F>> PredictInplace<ArrayBase<D, Ix2>, Array1<L>>
+impl<F: Float, L: Label + Default + Copy, D: Data<Elem = F>> PredictInplace<ArrayBase<D, Ix2>, Array1<L>>
 for RandomForestClassifier<F, L>
 {
-    fn predict_inplace(&self, _x: &ArrayBase<D, Ix2>, _y: &mut Array1<L>) {
-       // TODO implement
+    fn predict_inplace(&self, x: &ArrayBase<D, Ix2>, y: &mut Array1<L>) {
+        assert_eq!(
+            x.nrows(),
+            y.len(),
+            "The number of data points must match the number of output targets."
+        );
+
+        // key is the row's index and the value is a vector of labels for that row from all trees
+        let mut trees_targets: HashMap<usize, Vec<L>> = HashMap::new();
+        
+        for tree in &self.trees {
+            let targets = tree.predict(x);
+            for (idx, target) in targets.iter().enumerate() {
+                let row_targets = trees_targets.entry(idx).or_insert(Vec::new());
+                row_targets.push(*target);
+            }
+        }
+
+        // search for most frequent label in each row
+        for (idx, target) in y.iter_mut().enumerate() {
+            *target = most_common::<L>(trees_targets.get(&idx).unwrap()).clone();
+        }
+        
     }
 
     fn default_target(&self, x: &ArrayBase<D, Ix2>) -> Array1<L> {
         Array1::default(x.nrows())
-        // TODO implement
     }
+}
+
+fn most_common<L:  std::hash::Hash + std::cmp::Eq>(targets: &[L]) -> &L {
+    let mut map = HashMap::new();
+    for target in targets {
+        let counter = map.entry(target).or_insert(0);
+        *counter += 1;
+    }
+    let (most_common, _) = map.into_iter().max_by_key(|(_, v)| *v).unwrap();
+    most_common
 }
 
 
