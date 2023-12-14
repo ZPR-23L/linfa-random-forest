@@ -56,6 +56,7 @@ impl<F: Float, L: Label> RandomForestValidParams<F, L> {
     pub fn max_features(&self) -> MaxFeatures {
         self.max_features
     }
+
 }
 
 #[cfg_attr(
