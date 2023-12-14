@@ -188,4 +188,12 @@ mod tests {
         let result = params.check_ref();
         assert!(result.is_err());
     }
+
+    #[test]
+    fn invalid_bootstrap_params() {
+        let params = RandomForestClassifier::<f64, bool>::params();
+        let params = params.bootstrap(false).oob_score(true);
+        let result = params.check_ref();
+        assert!(result.is_err());
+    }
 }
