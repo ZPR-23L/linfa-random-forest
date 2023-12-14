@@ -48,10 +48,6 @@ for RandomForestValidParams<F, L>
         // TODO extend implementation
         // This is a draft - many things may be changed or added
 
-        if !self.bootstrap() && self.oob_score() {
-            // Err(Error::Parameters(format!("Max samples should be in range (0, 1)")))
-        }
-
         let mut fitted_trees: Vec<DecisionTree<F, L>> = Vec::new();
         if self.bootstrap() {
             let samples = RandomForestClassifier::bootstrap(dataset, self.num_trees(), self.max_samples().unwrap());
