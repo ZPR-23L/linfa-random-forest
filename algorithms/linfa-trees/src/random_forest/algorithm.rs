@@ -1,3 +1,5 @@
+//! Random forest
+//! 
 use std::collections::HashMap;
 
 use ndarray::{Array1, ArrayBase, Data, Ix2};
@@ -11,6 +13,16 @@ use linfa::prelude::Fit;
 use linfa::traits::{PredictInplace, Predict};
 use crate::{DecisionTree, RandomForestValidParams};
 
+
+/// A random forest model for classification
+/// 
+/// ### Structure
+/// 
+/// ### Algorithm
+/// 
+/// ### Predictions
+/// 
+/// ### Example
 pub struct RandomForestClassifier<F: Float, L: Label> {
     trees: Vec<DecisionTree<F, L>>, // collection of fitted decision trees of the forest
     oob_score: Option<f32>
@@ -92,6 +104,7 @@ for RandomForestValidParams<F, L>
 impl<F: Float, L: Label + Default + Copy, D: Data<Elem = F>> PredictInplace<ArrayBase<D, Ix2>, Array1<L>>
 for RandomForestClassifier<F, L>
 {
+    /// Make predictions for each row of a matrix of features `x`.
     fn predict_inplace(&self, x: &ArrayBase<D, Ix2>, y: &mut Array1<L>) {
         assert_eq!(
             x.nrows(),
@@ -136,7 +149,7 @@ fn most_common<L: std::hash::Hash + Eq>(targets: &[L]) -> &L {
 #[cfg(test)]
 mod tests {
     use linfa::ParamGuard;
-    use crate::{RandomForestClassifier, RandomForestValidParams, RandomForestParams, MaxFeatures};
+    use crate::{RandomForestClassifier, RandomForestValidParams, RandomForestParams, DecisionTree, MaxFeatures, SplitQuality};
 
     #[test]
     fn autotraits() {
@@ -171,6 +184,15 @@ mod tests {
         assert_eq!(valid_params.oob_score(), true);
         assert_eq!(valid_params.max_samples(), Some(0.5));
         assert_eq!(valid_params.max_features(), MaxFeatures::None);
+    }
+
+    #[test]
+    fn custom_tree_params() {
+        let params = RandomForestClassifier::<f64, bool>::params();
+        let valid_params = params.trees_params(
+            DecisionTree::params().split_quality(SplitQuality::Entropy)
+        ).check().unwrap();
+        assert_eq!(valid_params.trees_params().split_quality(), SplitQuality::Entropy);
     }
 
     #[test]
