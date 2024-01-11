@@ -10,7 +10,7 @@ Decision Trees (DTs) are a non-parametric supervised learning method used for cl
 
 ## Current state
 
-`linfa-trees` currently provides an implementation of single tree fitting
+`linfa-trees` currently provides an implementation of single tree fitting and random forest.
 
 ## Examples
 
@@ -25,6 +25,11 @@ This generates the following tree:
 <p align="center">
    <img src="./iris-decisiontree.svg">
 </p>
+
+To run an example of random forest, use:
+```bash
+$ cargo run --release --example random_forest
+```
 
 ## License
 Dual-licensed to be compatible with the Rust project.

@@ -37,7 +37,7 @@ pub enum MaxFeatures {
 /// ### Example
 /// 
 /// ```rust
-/// use linfa_trees::{RandomForestClassifier, MaxFeatures};
+/// use linfa_trees::{RandomForestClassifier, MaxFeatures, DecisionTree};
 /// use linfa_datasets::iris;
 /// use linfa::prelude::*;
 ///
@@ -45,6 +45,10 @@ pub enum MaxFeatures {
 /// let params = RandomForestClassifier::params();
 /// // Set the parameters to the desired values
 /// let params = params.num_trees(150).max_samples(0.8).max_features(MaxFeatures::Sqrt);
+/// // You can also change the parameters of decision trees
+/// let tree_params = DecisionTree::params();
+/// let tree_params = tree_params.max_depth(Some(5)).min_weight_leaf(2.);
+/// let params = params.trees_params(tree_params);
 /// ```
 pub struct RandomForestValidParams<F, L> {
     trees_params: DecisionTreeValidParams<F, L>,
@@ -52,7 +56,7 @@ pub struct RandomForestValidParams<F, L> {
     bootstrap: bool, // is bootstrapping enabled
     oob_score: bool, // is oob score enabled
     max_samples: Option<f32>, // number of samples to bootstrap
-    max_features: MaxFeatures // number of features to bootstrap
+    max_features: MaxFeatures // number of features 
 }
 
 impl<F: Float, L: Label> RandomForestValidParams<F, L> {
@@ -67,7 +71,8 @@ impl<F: Float, L: Label> RandomForestValidParams<F, L> {
         self.num_trees
     }
 
-    /// Returns a boolean - whether bootstrapping is used in the forest or not.
+    /// Returns a boolean - whether bootstrapping is used in the forest or not. If set to false,
+    /// all samples in the dataset are used to create a single tree.
     pub fn bootstrap(&self) -> bool {
         self.bootstrap
     }
@@ -80,7 +85,7 @@ impl<F: Float, L: Label> RandomForestValidParams<F, L> {
     /// Returns a float in range (0, 1) or `None`. The result of multiplying this float by
     /// the number of all samples in the dataset is the number of samples used to create a single 
     /// [decision tree](DecisionTree) of the [random forest](RandomForestClassifier). If it is `None`,
-    /// then the whole dataset is used.
+    /// then the number of samples is the number of all samples in the dataset.
     pub fn max_samples(&self) -> Option<f32> {
         self.max_samples
     }
@@ -129,18 +134,18 @@ impl<F: Float, L: Label> RandomForestParams<F, L> {
         self
     }
 
-    /// Sets a boolean - whether OOb score is used in the forest or not.
+    /// Sets a boolean - whether OOB score is used in the forest or not.
     pub fn oob_score(mut self, oob_score: bool) -> Self {
         self.0.oob_score = oob_score;
         self
     }
 
     /// Sets the number of samples used to construct each tree of the random forest.
-    /// `max_sampels` should be a float in range (0, 1) or `None`.
+    /// `max_samples` should be a float in range (0, 1) or `None`.
     /// The result of multiplying this float by the number of all samples in
     /// the dataset is the number of samples used to create a single 
     /// [decision tree](DecisionTree) of the [random forest](RandomForestClassifier). If it is `None`,
-    /// then the whole dataset is used.
+    /// then the number of samples is the number of all samples in the dataset.
     pub fn max_samples(mut self, max_samples: Option<f32>) -> Self {
         self.0.max_samples = max_samples;
         self
@@ -204,6 +209,9 @@ impl<F: Float, L> ParamGuard for RandomForestParams<F, L> {
         }
         if !self.0.bootstrap && self.0.oob_score {
             return Err(Error::Parameters(format!("Cannot have oob_score without bootstrap")));
+        }
+        if !self.0.bootstrap && self.0.max_samples != None {
+            return Err(Error::Parameters(format!("Cannot set max_samples without bootstrap")));
         }
         Ok(&self.0)
     }

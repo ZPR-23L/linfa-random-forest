@@ -18,11 +18,42 @@ use crate::{DecisionTree, RandomForestValidParams};
 /// 
 /// ### Structure
 /// 
+/// A random forest is an ensamble of decision trees. Each tree is fitted with some random noise,
+/// which ensures variability between the trees. That in turn, makes it statistically a more
+/// accurate model, in comparison to a single decision tree.
+/// 
 /// ### Algorithm
+/// 
+/// To create a tree, a subset of the original dataset is chosen. When bootstrapping is enabled, a number of
+/// samples can be specified. The samples are then drawn with replacement from the original dataset. This means
+/// that even when the sample size is equal to the size of the dataset, not all samples will be used - there will
+/// be repeats of the same rows. With bootstrapping disabled, all samples will be used to fit every tree.
+/// 
+/// Another means of adding random noise to the trees is by randomly selecting the features used to train a tree.
+/// 
+/// The number of features and samples can be specified as [hyperparameters](crate::RandomForestParams).
 /// 
 /// ### Predictions
 /// 
+/// Prediction is made by picking the most common label from the predictions of all decision trees of the forest.
+/// 
 /// ### Example
+/// 
+/// Below is an example on how to train a random forest with default hyperparams:
+/// 
+/// ```rust
+/// use linfa_trees::RandomForestClassifier;
+/// use linfa::prelude::*;
+/// use linfa_datasets;
+/// 
+/// // Load the dataset
+/// let dataset = linfa_datasets::iris();
+/// // Fit the random forest
+/// let forest = RandomForestClassifier::params().fit(&dataset).unwrap();
+/// // Get accuracy on training set
+/// let accuracy = forest.predict(&dataset).confusion_matrix(&dataset).unwrap().accuracy();
+/// ```
+
 pub struct RandomForestClassifier<F: Float, L: Label> {
     trees: Vec<DecisionTree<F, L>>, // collection of fitted decision trees of the forest
     oob_score: Option<f32>
@@ -112,6 +143,9 @@ for RandomForestClassifier<F, L>
             "The number of data points must match the number of output targets."
         );
 
+        // targets are array of arrays - one array per one tree
+        // multithreading
+
         // key is the row's index and the value is a vector of labels for that row from all trees
         let mut trees_targets: HashMap<usize, Vec<L>> = HashMap::new();
 
@@ -189,9 +223,8 @@ mod tests {
     #[test]
     fn custom_tree_params() {
         let params = RandomForestClassifier::<f64, bool>::params();
-        let valid_params = params.trees_params(
-            DecisionTree::params().split_quality(SplitQuality::Entropy)
-        ).check().unwrap();
+        let tree_params = DecisionTree::params().split_quality(SplitQuality::Entropy);
+        let valid_params = params.trees_params(tree_params).check().unwrap();
         assert_eq!(valid_params.trees_params().split_quality(), SplitQuality::Entropy);
     }
 
@@ -207,6 +240,22 @@ mod tests {
     fn invalid_max_features() {
         let params = RandomForestClassifier::<f64, bool>::params();
         let params = params.max_features(MaxFeatures::Float(1.5));
+        let result = params.check_ref();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn oob_without_bootstrap_error() {
+        let params = RandomForestClassifier::<f64, bool>::params();
+        let params = params.bootstrap(false).oob_score(true);
+        let result = params.check_ref();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn max_samples_without_bootstrap_error() {
+        let params = RandomForestClassifier::<f64, bool>::params();
+        let params = params.bootstrap(false).max_samples(Some(0.5));
         let result = params.check_ref();
         assert!(result.is_err());
     }
