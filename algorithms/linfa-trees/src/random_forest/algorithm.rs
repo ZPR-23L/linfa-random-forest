@@ -113,8 +113,8 @@ for RandomForestValidParams<F, L>
             else {Self::Object::bootstrap_features(&dataset, self.num_trees(), bootstrap_features)};
 
         for sample in samples {
-            let tree = self.trees_params().fit(&sample);
-            fitted_trees.push(tree.unwrap());
+            let tree = self.trees_params().fit(&sample)?;
+            fitted_trees.push(tree);
         }
 
         let oob_score = if self.oob_score() {Self::Object::calculate_oob_score()} else {None};
