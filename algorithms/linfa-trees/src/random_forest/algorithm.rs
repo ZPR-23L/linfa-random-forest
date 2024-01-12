@@ -1,8 +1,7 @@
 //! Random forest
 //! 
 use std::collections::HashMap;
-
-use ndarray::{Array1, ArrayBase, Data, Ix2};
+use ndarray::{Array1, Array2, ArrayBase, Data, Ix2};
 use linfa::{
     dataset::{Labels, AsSingleTargets},
     error::Error,
@@ -11,7 +10,7 @@ use linfa::{
 };
 use linfa::prelude::Fit;
 use linfa::traits::{PredictInplace, Predict};
-use crate::{DecisionTree, RandomForestValidParams};
+use crate::{DecisionTree, RandomForestValidParams, MaxFeatures};
 
 
 /// A random forest model for classification
@@ -67,7 +66,12 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
     }
 
     fn bootstrap<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(dataset: &DatasetBase<ArrayBase<D, Ix2>, T>, num_trees: usize,
-                             max_samples: f32) -> Vec<&DatasetBase<ArrayBase<D, Ix2>, T>> {
+                             max_samples: usize, max_features: usize) -> Vec<&DatasetBase<ArrayBase<D, Ix2>, T>> {
+        // TODO implement
+        Vec::default()
+    }
+    fn bootstrap_features<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(dataset: &DatasetBase<ArrayBase<D, Ix2>, T>, num_trees: usize,
+        max_features: usize) -> Vec<&DatasetBase<ArrayBase<D, Ix2>, T>> {
         // TODO implement
         Vec::default()
     }
@@ -77,7 +81,6 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
     }
 }
 
-
 impl<'a, F: Float, L: Label + 'a + std::fmt::Debug, D, T> Fit<ArrayBase<D, Ix2>, T, Error>
 for RandomForestValidParams<F, L>
     where
@@ -86,43 +89,35 @@ for RandomForestValidParams<F, L>
 {
     type Object = RandomForestClassifier<F, L>;
 
+    /// Using specified hyperparameters, fit a random forest on a dataset with a matrix of features and an array of labels
     fn fit(&self, dataset: &DatasetBase<ArrayBase<D, Ix2>, T>) -> Result<Self::Object> {
 
-        // TODO extend implementation
-        // This is a draft - many things may be changed or added
-
         let mut fitted_trees: Vec<DecisionTree<F, L>> = Vec::new();
-        if self.bootstrap() {
-            let samples = RandomForestClassifier::bootstrap(dataset, self.num_trees(), self.max_samples().unwrap());
-            for sample in samples {
-                let tree = DecisionTree::params()
-                    .split_quality(self.trees_params().split_quality())
-                    .max_depth(self.trees_params().max_depth())
-                    .min_weight_split(self.trees_params().min_weight_split())
-                    .min_weight_leaf(self.trees_params().min_weight_leaf())
-                    .min_impurity_decrease(self.trees_params().min_impurity_decrease())
-                    .fit(sample);
-                fitted_trees.push(tree.unwrap())
-            }
-        }
-        else {
-            for _num_tree in 0..self.num_trees() {
-                let tree = DecisionTree::params()
-                    .split_quality(self.trees_params().split_quality())
-                    .max_depth(self.trees_params().max_depth())
-                    .min_weight_split(self.trees_params().min_weight_split())
-                    .min_weight_leaf(self.trees_params().min_weight_leaf())
-                    .min_impurity_decrease(self.trees_params().min_impurity_decrease())
-                    .fit(dataset);
-                fitted_trees.push(tree.unwrap())
-            }
+
+        let num_features = dataset.feature_names().len();
+        let bootstrap_features = match self.max_features() {
+            MaxFeatures::Sqrt => f64::sqrt(num_features as f64) as usize,
+            MaxFeatures::Log2 => f64::log2(num_features as f64) as usize,
+            MaxFeatures::Float(n) => std::cmp::max(1, ((num_features as f32) * n) as usize),
+            MaxFeatures::None => num_features
+        };
+
+        let num_samples = dataset.records().len();
+        let bootstrap_samples = match self.max_samples() {
+            Some(n) => std::cmp::max(1, ((num_samples as f32) * n) as usize), 
+            None => num_samples
+        };
+
+        let samples = if self.bootstrap()
+            {Self::Object::bootstrap(&dataset, self.num_trees(), bootstrap_samples, bootstrap_features)}
+            else {Self::Object::bootstrap_features(&dataset, self.num_trees(), bootstrap_features)};
+
+        for sample in samples {
+            let tree = self.trees_params().fit(&sample);
+            fitted_trees.push(tree.unwrap());
         }
 
-        let oob_score ;
-        if self.oob_score() {
-            oob_score = RandomForestClassifier::<F, L>::calculate_oob_score()
-        }
-        else { oob_score = None }
+        let oob_score = if self.oob_score() {Self::Object::calculate_oob_score()} else {None};
 
         Ok(RandomForestClassifier{
             trees: fitted_trees,
@@ -143,25 +138,18 @@ for RandomForestClassifier<F, L>
             "The number of data points must match the number of output targets."
         );
 
-        // targets are array of arrays - one array per one tree
-        // multithreading
-
-        // key is the row's index and the value is a vector of labels for that row from all trees
-        let mut trees_targets: HashMap<usize, Vec<L>> = HashMap::new();
+        // 2D array holds predictions for each row of `x` from every tree
+        let mut trees_targets = Array2::<L>::default((0, x.nrows()));
 
         for tree in &self.trees {
             let targets = tree.predict(x);
-            for (idx, target) in targets.iter().enumerate() {
-                let row_targets = trees_targets.entry(idx).or_insert(Vec::new());
-                row_targets.push(*target);
-            }
+            trees_targets.push_row(targets.view()).unwrap();
         }
 
-        // search for most frequent label in each row
+        // Search for most frequent label in each column
         for (idx, target) in y.iter_mut().enumerate() {
-            *target = most_common::<L>(trees_targets.get(&idx).unwrap()).clone();
+            *target = most_common::<L>(trees_targets.column(idx).to_owned()).clone();
         }
-
     }
 
     fn default_target(&self, x: &ArrayBase<D, Ix2>) -> Array1<L> {
@@ -169,7 +157,7 @@ for RandomForestClassifier<F, L>
     }
 }
 
-fn most_common<L: std::hash::Hash + Eq>(targets: &[L]) -> &L {
+fn most_common<L: std::hash::Hash + Eq>(targets: Array1<L>) -> L {
     let mut map = HashMap::new();
     for target in targets {
         let counter = map.entry(target).or_insert(0);
