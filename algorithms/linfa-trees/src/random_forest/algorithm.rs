@@ -5,7 +5,8 @@ use linfa::prelude::Fit;
 use linfa::traits::{Predict, PredictInplace};
 use std::collections::HashMap;
 use ndarray::{Array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
-use rand::Rng;
+use ndarray_rand::rand::Rng;
+use ndarray_rand::rand::thread_rng;
 use linfa::{
     dataset::{AsSingleTargets, Labels},
     error::Error,
@@ -76,7 +77,7 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
         let mut bootstrapped_samples = Vec::new();
 
         for _ in 0..num_trees {
-            let mut rng = rand::thread_rng();
+            let mut rng = thread_rng();
 
             // Sample with replacement
             let indices = (0..dataset.nsamples())
@@ -102,6 +103,38 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
 
         bootstrapped_samples
     }
+
+    fn bootstrap_samples<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(
+        dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
+        num_trees: usize,
+        max_samples: usize,
+    ) -> Vec<DatasetBase<Array<F, Ix2>, Array<L, Ix1>>> {
+        let mut bootstrapped_samples = Vec::new();
+
+        for _ in 0..num_trees {
+            let mut rng = thread_rng();
+
+            // Sample with replacement
+            let indices = (0..dataset.nsamples())
+                .map(|_| rng.gen_range(0..dataset.nsamples()))
+                .take(max_samples)
+                .collect::<Vec<_>>();
+
+            let records = dataset.records().select(Axis(0), &indices);
+            let targets = dataset.as_targets().select(Axis(0), &indices);
+
+            // Sample features with replacement
+            let feature_indices = (0..dataset.nfeatures()).collect::<Vec<_>>();
+
+            let records = records.select(Axis(1), &feature_indices);
+
+            // Create a bootstrapped dataset
+            let bootstrapped_dataset = DatasetBase::new(records, targets);
+            bootstrapped_samples.push(bootstrapped_dataset);
+        }
+
+        bootstrapped_samples
+    }
     fn bootstrap_features<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(
         dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
         num_trees: usize,
@@ -110,7 +143,7 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
         let mut bootstrapped_features = Vec::new();
 
         for _ in 0..num_trees {
-            let mut rng = rand::thread_rng();
+            let mut rng = thread_rng();
 
             // Sample with replacement
             let indices = (0..dataset.nsamples()).collect::<Vec<_>>();
@@ -361,6 +394,10 @@ mod tests {
 
         let dataset = Dataset::new(data, targets);
         let bootstrapped = RandomForestClassifier::bootstrap(&dataset, 10, 10, 10);
+        bootstrapped.iter().for_each(|x| {
+            println!("{:?}", x);
+            println!()
+        });
         assert_eq!(bootstrapped.len(), 10);
         assert!(bootstrapped.iter().all(|x| x.nsamples() == 10));
         assert!(bootstrapped.iter().all(|x| x.nfeatures() == 10));
