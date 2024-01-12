@@ -209,14 +209,23 @@ mod tests {
         let params = RandomForestClassifier::<f64, bool>::params();
         let tree_params = DecisionTree::params().split_quality(SplitQuality::Entropy);
         let valid_params = params.trees_params(tree_params).check().unwrap();
-        assert_eq!(valid_params.trees_params().split_quality(), SplitQuality::Entropy);
+        assert_eq!(valid_params.trees_params().check().unwrap().split_quality(), SplitQuality::Entropy);
+    }
+
+    #[test]
+    fn custom_invalid_tree_params() {
+        let params = RandomForestClassifier::<f64, bool>::params();
+        let tree_params = DecisionTree::params().min_impurity_decrease(0.);
+        let params = params.trees_params(tree_params);
+        let result = params.check();
+        assert!(result.is_err());
     }
 
     #[test]
     fn invalid_max_samples() {
         let params = RandomForestClassifier::<f64, bool>::params();
         let params = params.max_samples(Some(1.5));
-        let result = params.check_ref();
+        let result = params.check();
         assert!(result.is_err());
     }
 
@@ -224,7 +233,7 @@ mod tests {
     fn invalid_max_features() {
         let params = RandomForestClassifier::<f64, bool>::params();
         let params = params.max_features(MaxFeatures::Float(1.5));
-        let result = params.check_ref();
+        let result = params.check();
         assert!(result.is_err());
     }
 
@@ -232,7 +241,7 @@ mod tests {
     fn oob_without_bootstrap_error() {
         let params = RandomForestClassifier::<f64, bool>::params();
         let params = params.bootstrap(false).oob_score(true);
-        let result = params.check_ref();
+        let result = params.check();
         assert!(result.is_err());
     }
 
@@ -240,7 +249,7 @@ mod tests {
     fn max_samples_without_bootstrap_error() {
         let params = RandomForestClassifier::<f64, bool>::params();
         let params = params.bootstrap(false).max_samples(Some(0.5));
-        let result = params.check_ref();
+        let result = params.check();
         assert!(result.is_err());
     }
 }

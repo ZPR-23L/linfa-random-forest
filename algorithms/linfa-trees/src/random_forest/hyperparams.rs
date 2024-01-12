@@ -1,5 +1,5 @@
 use linfa::{error::{Error, Result}, Float, Label, ParamGuard};
-use crate::{DecisionTreeValidParams, DecisionTreeParams, DecisionTree, RandomForestClassifier};
+use crate::{DecisionTreeParams, DecisionTree, RandomForestClassifier};
 
 #[cfg(feature = "serde")]
 use serde_crate::{Deserialize, Serialize};
@@ -51,7 +51,7 @@ pub enum MaxFeatures {
 /// let params = params.trees_params(tree_params);
 /// ```
 pub struct RandomForestValidParams<F, L> {
-    trees_params: DecisionTreeValidParams<F, L>,
+    trees_params: DecisionTreeParams<F, L>,
     num_trees: usize, // number of estimators
     bootstrap: bool, // is bootstrapping enabled
     oob_score: bool, // is oob score enabled
@@ -62,7 +62,7 @@ pub struct RandomForestValidParams<F, L> {
 impl<F: Float, L: Label> RandomForestValidParams<F, L> {
     /// Returns [DecisionTreeValidParams]. These are the hyperparameters used for all the
     /// [decision trees](DecisionTree) of the [random forest](RandomForestClassifier).
-    pub fn trees_params(&self) -> DecisionTreeValidParams<F, L> {
+    pub fn trees_params(&self) -> DecisionTreeParams<F, L> {
         self.trees_params.clone()
     }
 
@@ -108,7 +108,7 @@ pub struct RandomForestParams<F, L> (RandomForestValidParams<F, L>);
 impl<F: Float, L: Label> RandomForestParams<F, L> {
     pub fn new() -> Self {
         Self(RandomForestValidParams {
-            trees_params: DecisionTree::params().check().unwrap(),
+            trees_params: DecisionTree::params(),
             num_trees: 100,
             bootstrap: true,
             oob_score: false,
@@ -117,8 +117,9 @@ impl<F: Float, L: Label> RandomForestParams<F, L> {
         })
     }
 
+    /// Sets the parameters of trees in the random forest.
     pub fn trees_params(mut self, trees_params: DecisionTreeParams<F, L>) -> Self {
-        self.0.trees_params = trees_params.check().unwrap();
+        self.0.trees_params = trees_params;
         self
     }
 
@@ -128,18 +129,20 @@ impl<F: Float, L: Label> RandomForestParams<F, L> {
         self
     }
 
-    /// Sets a boolean - whether bootstrapping is used in the forest or not.
+    /// Sets a boolean - whether bootstrapping is used in the forest or not. Setting bootstrapping to `false`
+    /// will mean that each tree of the forest is fitted using all samples from the original dataset.
     pub fn bootstrap(mut self, bootstrap: bool) -> Self {
         self.0.bootstrap = bootstrap;
         self
     }
 
-    /// Sets a boolean - whether OOB score is used in the forest or not.
+    /// Sets a boolean - whether Out-of-Bag score is returned or not.
     pub fn oob_score(mut self, oob_score: bool) -> Self {
         self.0.oob_score = oob_score;
         self
     }
 
+    /// This parameter can only be used when `bootstrap = true`. 
     /// Sets the number of samples used to construct each tree of the random forest.
     /// `max_samples` should be a float in range (0, 1) or `None`.
     /// The result of multiplying this float by the number of all samples in
@@ -191,6 +194,7 @@ impl<F: Float, L> ParamGuard for RandomForestParams<F, L> {
     type Error = Error;
 
     fn check_ref(&self) -> Result<&Self::Checked> {
+        self.0.trees_params.check_ref()?;
         if let MaxFeatures::Float(value) = self.0.max_features {
             if value <= 0.0 || value >= 1.0 {
                 return Err(Error::Parameters(format!(
