@@ -1,9 +1,9 @@
 use linfa::prelude::*;
+use linfa_trees::{DecisionTree, RandomForestClassifier, Result, SplitQuality};
 use ndarray_rand::rand::SeedableRng;
 use rand::rngs::SmallRng;
-use linfa_trees::{DecisionTree, RandomForestClassifier, Result, SplitQuality};
 
-fn main() -> Result<()>{
+fn main() -> Result<()> {
     // Load dataset
     let mut rng = SmallRng::seed_from_u64(42);
 

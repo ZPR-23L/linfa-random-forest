@@ -1,5 +1,8 @@
-use linfa::{error::{Error, Result}, Float, Label, ParamGuard};
-use crate::{DecisionTreeParams, DecisionTree, RandomForestClassifier};
+use crate::{DecisionTree, DecisionTreeParams, RandomForestClassifier};
+use linfa::{
+    error::{Error, Result},
+    Float, Label, ParamGuard,
+};
 
 #[cfg(feature = "serde")]
 use serde_crate::{Deserialize, Serialize};
@@ -22,7 +25,7 @@ pub enum MaxFeatures {
     /// and the number of all features. This number has to be in the range (0, 1)
     Float(f32),
     /// This will mean all features are used
-    None
+    None,
 }
 
 #[cfg_attr(
@@ -33,9 +36,9 @@ pub enum MaxFeatures {
 #[derive(Clone, Copy, Debug, PartialEq)]
 /// The set of hyperparameters that can be specified for fitting a [random forest](RandomForestClassifier).
 /// You can also change all the hyperparameters that are specific for the [decision tree](DecisionTreeValidParams).
-/// 
+///
 /// ### Example
-/// 
+///
 /// ```rust
 /// use linfa_trees::{RandomForestClassifier, MaxFeatures, DecisionTree};
 /// use linfa_datasets::iris;
@@ -52,11 +55,11 @@ pub enum MaxFeatures {
 /// ```
 pub struct RandomForestValidParams<F, L> {
     trees_params: DecisionTreeParams<F, L>,
-    num_trees: usize, // number of estimators
-    bootstrap: bool, // is bootstrapping enabled
-    oob_score: bool, // is oob score enabled
-    max_samples: Option<f32>, // number of samples to bootstrap
-    max_features: MaxFeatures // number of features 
+    num_trees: usize,          // number of estimators
+    bootstrap: bool,           // is bootstrapping enabled
+    oob_score: bool,           // is oob score enabled
+    max_samples: Option<f32>,  // number of samples to bootstrap
+    max_features: MaxFeatures, // number of features
 }
 
 impl<F: Float, L: Label> RandomForestValidParams<F, L> {
@@ -83,7 +86,7 @@ impl<F: Float, L: Label> RandomForestValidParams<F, L> {
     }
 
     /// Returns a float in range (0, 1) or `None`. The result of multiplying this float by
-    /// the number of all samples in the dataset is the number of samples used to create a single 
+    /// the number of all samples in the dataset is the number of samples used to create a single
     /// [decision tree](DecisionTree) of the [random forest](RandomForestClassifier). If it is `None`,
     /// then the number of samples is the number of all samples in the dataset.
     pub fn max_samples(&self) -> Option<f32> {
@@ -94,7 +97,6 @@ impl<F: Float, L: Label> RandomForestValidParams<F, L> {
     pub fn max_features(&self) -> MaxFeatures {
         self.max_features
     }
-
 }
 
 #[cfg_attr(
@@ -103,7 +105,7 @@ impl<F: Float, L: Label> RandomForestValidParams<F, L> {
     serde(crate = "serde_crate")
 )]
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RandomForestParams<F, L> (RandomForestValidParams<F, L>);
+pub struct RandomForestParams<F, L>(RandomForestValidParams<F, L>);
 
 impl<F: Float, L: Label> RandomForestParams<F, L> {
     pub fn new() -> Self {
@@ -113,7 +115,7 @@ impl<F: Float, L: Label> RandomForestParams<F, L> {
             bootstrap: true,
             oob_score: false,
             max_samples: None,
-            max_features: MaxFeatures::Sqrt
+            max_features: MaxFeatures::Sqrt,
         })
     }
 
@@ -142,11 +144,11 @@ impl<F: Float, L: Label> RandomForestParams<F, L> {
         self
     }
 
-    /// This parameter can only be used when `bootstrap = true`. 
+    /// This parameter can only be used when `bootstrap = true`.
     /// Sets the number of samples used to construct each tree of the random forest.
     /// `max_samples` should be a float in range (0, 1) or `None`.
     /// The result of multiplying this float by the number of all samples in
-    /// the dataset is the number of samples used to create a single 
+    /// the dataset is the number of samples used to create a single
     /// [decision tree](DecisionTree) of the [random forest](RandomForestClassifier). If it is `None`,
     /// then the number of samples is the number of all samples in the dataset.
     pub fn max_samples(mut self, max_samples: Option<f32>) -> Self {
@@ -175,9 +177,9 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
     /// * `oob_score = false`
     /// * `max_samples = None`
     /// * `max_features = MaxFeatures::Sqrt`
-    /// 
+    ///
     /// ([Decision tree](DecisionTree) default parameters)
-    /// 
+    ///
     /// * `split_quality = SplitQuality::Gini`
     /// * `max_depth = None`
     /// * `min_weight_split = 2.0`
@@ -212,10 +214,14 @@ impl<F: Float, L> ParamGuard for RandomForestParams<F, L> {
             }
         }
         if !self.0.bootstrap && self.0.oob_score {
-            return Err(Error::Parameters(format!("Cannot have oob_score without bootstrap")));
+            return Err(Error::Parameters(format!(
+                "Cannot have oob_score without bootstrap"
+            )));
         }
         if !self.0.bootstrap && self.0.max_samples != None {
-            return Err(Error::Parameters(format!("Cannot set max_samples without bootstrap")));
+            return Err(Error::Parameters(format!(
+                "Cannot set max_samples without bootstrap"
+            )));
         }
         Ok(&self.0)
     }

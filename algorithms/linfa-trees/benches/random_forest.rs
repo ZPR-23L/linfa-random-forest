@@ -20,13 +20,9 @@ fn bench(c: &mut Criterion) {
         let dataset = dataset.into_single_target();
         let dataset = dataset.map_targets(|y| *y as usize);
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(size),
-            &dataset,
-            |b, dataset| {
-                b.iter(|| hyperparams.fit(&dataset));
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(size), &dataset, |b, dataset| {
+            b.iter(|| hyperparams.fit(&dataset));
+        });
     }
     group.finish();
 }
