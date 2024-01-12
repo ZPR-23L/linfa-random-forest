@@ -75,10 +75,6 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
         // TODO implement
         Vec::default()
     }
-    fn build_trees<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>() -> Vec<DecisionTree<F, L>> {
-        // TODO implement
-        Vec::default()
-    }
 }
 
 impl<'a, F: Float, L: Label + 'a + std::fmt::Debug, D, T> Fit<ArrayBase<D, Ix2>, T, Error>
