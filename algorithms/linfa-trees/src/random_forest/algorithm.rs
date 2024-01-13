@@ -1,22 +1,21 @@
 //! Random forest
 //!
 use crate::{DecisionTree, MaxFeatures, RandomForestValidParams};
+use linfa::dataset::{AsTargets, Records};
 use linfa::prelude::Fit;
 use linfa::traits::{Predict, PredictInplace};
-use std::collections::HashMap;
-use std::sync::{Mutex, Arc};
-use rayon::scope;
-use ndarray::{Array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2, array};
-use ndarray_rand::rand::Rng;
-use ndarray_rand::rand::thread_rng;
 use linfa::{
     dataset::{AsSingleTargets, Labels},
     error::Error,
     error::Result,
     DatasetBase, Float, Label,
 };
-use linfa::dataset::{AsTargets, Records};
-
+use ndarray::{array, Array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
+use ndarray_rand::rand::thread_rng;
+use ndarray_rand::rand::Rng;
+use rayon::scope;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// A random forest model for classification
 ///
@@ -58,23 +57,22 @@ use linfa::dataset::{AsTargets, Records};
 /// let accuracy = forest.predict(&dataset).confusion_matrix(&dataset).unwrap().accuracy();
 /// ```
 
+#[cfg_attr(
+    feature = "serde",
+    derive(Serialize, Deserialize),
+    serde(crate = "serde_crate")
+)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RandomForestClassifier<F: Float, L: Label> {
     trees: Vec<DecisionTree<F, L>>, // collection of fitted decision trees of the forest
-    oob_score: Option<f32>,
 }
 
 impl<F: Float, L: Label> RandomForestClassifier<F, L> {
-    fn calculate_oob_score() -> Option<f32> {
-        // TODO implement
-        // TODO correct function signature
-        None
-    }
-
     fn bootstrap<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(
         dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
         num_trees: usize,
         max_samples: usize,
-        max_features: usize
+        max_features: usize,
     ) -> Vec<DatasetBase<Array<F, Ix2>, Array<L, Ix1>>> {
         let mut bootstrapped_samples = Vec::new();
 
@@ -140,7 +138,7 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
     fn bootstrap_features<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(
         dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
         num_trees: usize,
-        max_features: usize
+        max_features: usize,
     ) -> Vec<DatasetBase<Array<F, Ix2>, Array<L, Ix1>>> {
         let mut bootstrapped_features = Vec::new();
 
@@ -170,8 +168,8 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
     }
 }
 
-impl<'a, F: Float, L: Label + 'a + std::fmt::Debug + Sync + Send, D, T> Fit<ArrayBase<D, Ix2>, T, Error>
-    for RandomForestValidParams<F, L>
+impl<'a, F: Float, L: Label + 'a + std::fmt::Debug + Sync + Send, D, T>
+    Fit<ArrayBase<D, Ix2>, T, Error> for RandomForestValidParams<F, L>
 where
     D: Data<Elem = F>,
     T: AsSingleTargets<Elem = L> + Labels<Elem = L>,
@@ -219,17 +217,10 @@ where
             }
         });
 
-        let oob_score = if self.oob_score() {
-            Self::Object::calculate_oob_score()
-        } else {
-            None
-        };
-
         let fitted_trees = fitted_trees.into_inner().unwrap();
 
         Ok(RandomForestClassifier {
             trees: fitted_trees,
-            oob_score,
         })
     }
 }
@@ -296,13 +287,13 @@ mod tests {
         DecisionTree, MaxFeatures, RandomForestClassifier, RandomForestParams,
         RandomForestValidParams, SplitQuality,
     };
+    use linfa::dataset::Records;
+    use linfa::traits::{Fit, PredictInplace};
+    use linfa::Dataset;
     use linfa::ParamGuard;
-    use ndarray::{array, ArrayBase, Ix2};
+    use ndarray::array;
     use ndarray_rand::rand::SeedableRng;
     use rand::prelude::SmallRng;
-    use linfa::dataset::Records;
-    use linfa::Dataset;
-    use linfa::traits::{Fit, PredictInplace};
 
     #[test]
     fn autotraits() {
@@ -318,7 +309,6 @@ mod tests {
         let valid_params = params.check().unwrap();
         assert_eq!(valid_params.num_trees(), 100);
         assert_eq!(valid_params.bootstrap(), true);
-        assert_eq!(valid_params.oob_score(), false);
         assert_eq!(valid_params.max_samples(), None);
         assert_eq!(valid_params.max_features(), MaxFeatures::Sqrt);
     }
@@ -328,14 +318,12 @@ mod tests {
         let params = RandomForestClassifier::<f64, bool>::params();
         let valid_params = params
             .num_trees(50)
-            .oob_score(true)
             .max_samples(Some(0.5))
             .max_features(MaxFeatures::None)
             .check()
             .unwrap();
         assert_eq!(valid_params.num_trees(), 50);
         assert_eq!(valid_params.bootstrap(), true);
-        assert_eq!(valid_params.oob_score(), true);
         assert_eq!(valid_params.max_samples(), Some(0.5));
         assert_eq!(valid_params.max_features(), MaxFeatures::None);
     }
@@ -372,14 +360,6 @@ mod tests {
     fn invalid_max_features() {
         let params = RandomForestClassifier::<f64, bool>::params();
         let params = params.max_features(MaxFeatures::Float(1.5));
-        let result = params.check();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn oob_without_bootstrap_error() {
-        let params = RandomForestClassifier::<f64, bool>::params();
-        let params = params.bootstrap(false).oob_score(true);
         let result = params.check();
         assert!(result.is_err());
     }
@@ -463,7 +443,9 @@ mod tests {
         let bootstrapped = RandomForestClassifier::bootstrap_samples(&dataset, 10, 10);
         assert_eq!(bootstrapped.len(), 10);
         assert!(bootstrapped.iter().all(|x| x.nsamples() == 10));
-        assert!(bootstrapped.iter().all(|x| x.nfeatures() == dataset.nfeatures()));
+        assert!(bootstrapped
+            .iter()
+            .all(|x| x.nfeatures() == dataset.nfeatures()));
     }
 
     #[test]
@@ -499,7 +481,9 @@ mod tests {
         let dataset = Dataset::new(data, targets);
         let bootstrapped = RandomForestClassifier::bootstrap_features(&dataset, 10, 10);
         assert_eq!(bootstrapped.len(), 10);
-        assert!(bootstrapped.iter().all(|x| x.nsamples() == dataset.nsamples()));
+        assert!(bootstrapped
+            .iter()
+            .all(|x| x.nsamples() == dataset.nsamples()));
         assert!(bootstrapped.iter().all(|x| x.nfeatures() == 10));
     }
 
@@ -507,14 +491,13 @@ mod tests {
     fn fit_test() {
         let mut rng = SmallRng::seed_from_u64(42);
 
-        let (train, test) = linfa_datasets::iris()
+        let (train, _) = linfa_datasets::iris()
             .shuffle(&mut rng)
             .split_with_ratio(0.8);
         let classifier_model = RandomForestClassifier::params().fit(&train);
         assert!(classifier_model.is_ok());
         let classifier_model = classifier_model.unwrap();
         assert_eq!(classifier_model.trees.len(), 100);
-        assert!(classifier_model.oob_score.is_none());
     }
 
     #[test]
@@ -528,7 +511,7 @@ mod tests {
     fn predict_inplace_test() {
         let mut rng = SmallRng::seed_from_u64(42);
 
-        let (train, test) = linfa_datasets::iris()
+        let (train, _) = linfa_datasets::iris()
             .shuffle(&mut rng)
             .split_with_ratio(0.8);
         let classifier_model = RandomForestClassifier::params().fit(&train).unwrap();
