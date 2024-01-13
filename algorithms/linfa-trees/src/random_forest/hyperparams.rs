@@ -24,7 +24,7 @@ pub enum MaxFeatures {
     /// The number of features used is the result of multiplying this number
     /// and the number of all features. This number has to be in the range (0, 1)
     Float(f32),
-    /// This will mean all features are used
+    /// This will mean the number of features is equal to the number of all features
     None,
 }
 
@@ -62,7 +62,7 @@ pub struct RandomForestValidParams<F, L> {
 }
 
 impl<F: Float, L: Label> RandomForestValidParams<F, L> {
-    /// Returns [DecisionTreeValidParams]. These are the hyperparameters used for all the
+    /// Returns [DecisionTreeParams]. These are the hyperparameters used for all the
     /// [decision trees](DecisionTree) of the [random forest](RandomForestClassifier).
     pub fn trees_params(&self) -> DecisionTreeParams<F, L> {
         self.trees_params.clone()
