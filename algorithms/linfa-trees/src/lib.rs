@@ -14,10 +14,13 @@
 //!
 //! # Current state
 //!
-//! `linfa-trees` currently provides an [implementation](DecisionTree) of single-tree fitting for classification.
+//! `linfa-trees` currently provides an [implementation](DecisionTree) of single-tree fitting for classification
+//! and an [implementation](RandomForestClassifier) of a random forest - ensamble of decision trees.
 //!
 
 mod decision_trees;
+mod random_forest;
 
 pub use decision_trees::*;
+pub use random_forest::*;
 pub use linfa::error::Result;
