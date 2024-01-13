@@ -9,7 +9,7 @@ fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("random_forest");
     config::set_default_benchmark_configs(&mut group);
 
-    let params: [(usize, usize); 4] = [(1_000, 5), (10_000, 5), (100_000, 5), (100_000, 10)];
+    let params: [(usize, usize); 4] = [(100, 4), (1_000, 4), (10_000, 4), (100_000, 4)];
 
     let feat_distr = Uniform::new(0., 5.).unwrap();
     let target_distr = DiscreteUniform::new(0, 5).unwrap();
