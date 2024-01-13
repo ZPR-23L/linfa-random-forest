@@ -35,7 +35,7 @@ pub enum MaxFeatures {
 )]
 #[derive(Clone, Copy, Debug, PartialEq)]
 /// The set of hyperparameters that can be specified for fitting a [random forest](RandomForestClassifier).
-/// You can also change all the hyperparameters that are specific for the [decision tree](DecisionTreeValidParams).
+/// You can also change all the hyperparameters that are specific for the [decision tree](DecisionTreeParams).
 ///
 /// ### Example
 ///
