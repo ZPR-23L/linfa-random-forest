@@ -4,7 +4,9 @@ use crate::{DecisionTree, MaxFeatures, RandomForestValidParams};
 use linfa::prelude::Fit;
 use linfa::traits::{Predict, PredictInplace};
 use std::collections::HashMap;
-use ndarray::{Array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
+use std::sync::{Mutex, Arc};
+use rayon::scope;
+use ndarray::{Array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2, array};
 use ndarray_rand::rand::Rng;
 use ndarray_rand::rand::thread_rng;
 use linfa::{
@@ -168,7 +170,7 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
     }
 }
 
-impl<'a, F: Float, L: Label + 'a + std::fmt::Debug, D, T> Fit<ArrayBase<D, Ix2>, T, Error>
+impl<'a, F: Float, L: Label + 'a + std::fmt::Debug + Sync + Send, D, T> Fit<ArrayBase<D, Ix2>, T, Error>
     for RandomForestValidParams<F, L>
 where
     D: Data<Elem = F>,
@@ -178,7 +180,7 @@ where
 
     /// Using specified hyperparameters, fit a random forest on a dataset with a matrix of features and an array of labels
     fn fit(&self, dataset: &DatasetBase<ArrayBase<D, Ix2>, T>) -> Result<Self::Object> {
-        let mut fitted_trees: Vec<DecisionTree<F, L>> = Vec::new();
+        let fitted_trees = Mutex::new(Vec::new());
 
         let num_features = dataset.feature_names().len();
         let bootstrap_features = match self.max_features() {
@@ -205,16 +207,25 @@ where
             Self::Object::bootstrap_features(&dataset, self.num_trees(), bootstrap_features)
         };
 
-        for sample in samples {
-            let tree = self.trees_params().fit(&sample)?;
-            fitted_trees.push(tree);
-        }
+        // Using concurrency for fitting trees
+        scope(|s| {
+            for sample in samples.iter() {
+                let fitted_trees_ref = &fitted_trees; // Borrow a reference to the Mutex
+                s.spawn(move |_| {
+                    let tree = self.trees_params().fit(sample).unwrap();
+                    // Lock the Mutex and push the tree into the vector
+                    fitted_trees_ref.lock().unwrap().push(tree);
+                });
+            }
+        });
 
         let oob_score = if self.oob_score() {
             Self::Object::calculate_oob_score()
         } else {
             None
         };
+
+        let fitted_trees = fitted_trees.into_inner().unwrap();
 
         Ok(RandomForestClassifier {
             trees: fitted_trees,
@@ -223,7 +234,7 @@ where
     }
 }
 
-impl<F: Float, L: Label + Default + Copy, D: Data<Elem = F>>
+impl<F: Float, L: Label + Default + Copy + Send + Sync, D: Data<Elem = F> + Send + Sync>
     PredictInplace<ArrayBase<D, Ix2>, Array1<L>> for RandomForestClassifier<F, L>
 {
     /// Make predictions for each row of a matrix of features `x`.
@@ -235,12 +246,21 @@ impl<F: Float, L: Label + Default + Copy, D: Data<Elem = F>>
         );
 
         // 2D array holds predictions for each row of `x` from every tree
-        let mut trees_targets = Array2::<L>::default((0, x.nrows()));
+        let trees_targets = Arc::new(Mutex::new(Array2::<L>::default((0, x.nrows()))));
 
-        for tree in &self.trees {
-            let targets = tree.predict(x);
-            trees_targets.push_row(targets.view()).unwrap();
-        }
+        // Each tree makes a prediction concurrently
+        scope(|s| {
+            for tree in &self.trees {
+                let trees_targets = Arc::clone(&trees_targets);
+                s.spawn(move |_| {
+                    let targets = tree.predict(x);
+                    let mut trees_targets = trees_targets.lock().unwrap();
+                    trees_targets.push_row(targets.view()).unwrap();
+                });
+            }
+        });
+
+        let trees_targets = trees_targets.lock().unwrap();
 
         // Search for most frequent label in each column
         for (idx, target) in y.iter_mut().enumerate() {
@@ -261,6 +281,13 @@ fn most_common<L: std::hash::Hash + Eq>(targets: Array1<L>) -> L {
     }
     let (most_common, _) = map.into_iter().max_by_key(|(_, v)| *v).unwrap();
     most_common
+}
+
+#[test]
+fn test_most_common() {
+    let test_array = array![1, 2, 1, 1, 4, 1, 2, 2, 2, 1];
+    let most_common_val = most_common(test_array);
+    assert_eq!(most_common_val, 1);
 }
 
 #[cfg(test)]
