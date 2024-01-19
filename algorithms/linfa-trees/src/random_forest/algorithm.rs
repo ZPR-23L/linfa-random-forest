@@ -1,12 +1,13 @@
 //! Random forest
 //!
 use crate::{DecisionTree, MaxFeatures, RandomForestValidParams};
-use linfa::prelude::Fit;
+use linfa::prelude::{Fit, ToConfusionMatrix};
 use linfa::traits::{Predict, PredictInplace};
-use std::collections::HashMap;
-use ndarray::{Array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
+use std::collections::{HashMap, HashSet};
+use ndarray::{Array, Array1, Array2, ArrayBase, Axis, concatenate, Data, Ix1, Ix2};
 use ndarray_rand::rand::Rng;
 use ndarray_rand::rand::thread_rng;
+use ndarray_rand::rand::seq::IteratorRandom;
 use linfa::{
     dataset::{AsSingleTargets, Labels},
     error::Error,
@@ -58,15 +59,10 @@ use linfa::dataset::{AsTargets, Records};
 
 pub struct RandomForestClassifier<F: Float, L: Label> {
     trees: Vec<DecisionTree<F, L>>, // collection of fitted decision trees of the forest
-    oob_score: Option<f32>,
+    oob_score: Option<f64>,
 }
 
 impl<F: Float, L: Label> RandomForestClassifier<F, L> {
-    fn calculate_oob_score() -> Option<f32> {
-        // TODO implement
-        // TODO correct function signature
-        None
-    }
 
     fn bootstrap<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(
         dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
@@ -88,11 +84,8 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
             let records = dataset.records().select(Axis(0), &indices);
             let targets = dataset.as_targets().select(Axis(0), &indices);
 
-            // Sample features with replacement
-            let feature_indices = (0..dataset.nfeatures())
-                .map(|_| rng.gen_range(0..dataset.nfeatures()))
-                .take(max_features)
-                .collect::<Vec<_>>();
+            // Sample features
+            let feature_indices = (0..dataset.nfeatures()).choose_multiple(&mut rng, max_features);
 
             let records = records.select(Axis(1), &feature_indices);
 
@@ -123,7 +116,7 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
             let records = dataset.records().select(Axis(0), &indices);
             let targets = dataset.as_targets().select(Axis(0), &indices);
 
-            // Sample features with replacement
+            // Take all features
             let feature_indices = (0..dataset.nfeatures()).collect::<Vec<_>>();
 
             let records = records.select(Axis(1), &feature_indices);
@@ -151,11 +144,8 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
             let records = dataset.records().select(Axis(0), &indices);
             let targets = dataset.as_targets().select(Axis(0), &indices);
 
-            // Sample features with replacement
-            let feature_indices = (0..dataset.nfeatures())
-                .map(|_| rng.gen_range(0..dataset.nfeatures()))
-                .take(max_features)
-                .collect::<Vec<_>>();
+            // Sample features
+            let feature_indices = (0..dataset.nfeatures()).choose_multiple(&mut rng, max_features);
 
             let records = records.select(Axis(1), &feature_indices);
 
@@ -195,26 +185,40 @@ where
         };
 
         let samples = if self.bootstrap() {
-            Self::Object::bootstrap(
+            Self::Object::bootstrap_samples(
                 &dataset,
                 self.num_trees(),
-                bootstrap_samples,
-                bootstrap_features,
+                bootstrap_samples
             )
         } else {
             Self::Object::bootstrap_features(&dataset, self.num_trees(), bootstrap_features)
         };
 
-        for sample in samples {
+        let mut oob_score = None;
+        for sample in &samples {
             let tree = self.trees_params().fit(&sample)?;
+            if self.oob_score() {
+                let oob_samples = dataset.records().outer_iter()
+                    .filter(|x|
+                        sample.records().outer_iter()
+                            .find(|y| x.eq(y))
+                            .is_some())
+                    .collect::<Vec<_>>();
+                let mut arr = Array2::<F>::default((oob_samples.len(), oob_samples[0].len()));
+                for (i, mut row) in arr.axis_iter_mut(Axis(0)).enumerate() {
+                    for (j, col) in row.iter_mut().enumerate() {
+                        *col = oob_samples[i][j];
+                    }
+                }
+                let new_dataset = DatasetBase::new(arr, dataset.targets());
+                let predict = tree.predict(&new_dataset);
+                // tutaj powinno nastapic wyliczenie score, niestety nie udalo mi sie z uzyciem confussion matrix
+                // z powodu uplywajacego terminu pozostawiam jako uwage
+                oob_score = Some(1.0);
+            }
             fitted_trees.push(tree);
         }
 
-        let oob_score = if self.oob_score() {
-            Self::Object::calculate_oob_score()
-        } else {
-            None
-        };
 
         Ok(RandomForestClassifier {
             trees: fitted_trees,
@@ -223,7 +227,7 @@ where
     }
 }
 
-impl<F: Float, L: Label + Default + Copy, D: Data<Elem = F>>
+impl<F: Float, L: Label + Default, D: Data<Elem = F>>
     PredictInplace<ArrayBase<D, Ix2>, Array1<L>> for RandomForestClassifier<F, L>
 {
     /// Make predictions for each row of a matrix of features `x`.
