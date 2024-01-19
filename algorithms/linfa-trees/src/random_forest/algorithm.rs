@@ -3,8 +3,8 @@
 use crate::{DecisionTree, MaxFeatures, RandomForestValidParams};
 use linfa::prelude::{Fit, ToConfusionMatrix};
 use linfa::traits::{Predict, PredictInplace};
-use std::collections::{HashMap, HashSet};
-use ndarray::{Array, Array1, Array2, ArrayBase, Axis, concatenate, Data, Ix1, Ix2};
+use std::collections::{HashMap};
+use ndarray::{Array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
 use ndarray_rand::rand::Rng;
 use ndarray_rand::rand::thread_rng;
 use ndarray_rand::rand::seq::IteratorRandom;
@@ -274,7 +274,7 @@ mod tests {
         RandomForestValidParams, SplitQuality,
     };
     use linfa::ParamGuard;
-    use ndarray::{array, ArrayBase, Ix2};
+    use ndarray::{array};
     use ndarray_rand::rand::SeedableRng;
     use rand::prelude::SmallRng;
     use linfa::dataset::Records;
