@@ -12,7 +12,7 @@ use linfa::{
     error::Result,
     DatasetBase, Float, Label,
 };
-use ndarray::{Array, array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
+use ndarray::{Array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
 use ndarray_rand::rand::thread_rng;
 use ndarray_rand::rand::Rng;
 use rayon::scope;
@@ -70,6 +70,10 @@ pub struct RandomForestClassifier<F: Float, L: Label> {
 }
 
 impl<F: Float, L: Label> RandomForestClassifier<F, L> {
+
+    fn get_oob_score(&self) -> Option<f64> {
+        self.oob_score
+    }
 
     fn bootstrap<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(
         dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
@@ -222,7 +226,7 @@ where
                             }
                         }
                         let new_dataset = DatasetBase::new(arr, dataset.targets());
-                        let predict = tree.predict(&new_dataset);
+                        let _predict = tree.predict(&new_dataset);
                         // tutaj powinno nastapic wyliczenie score, niestety nie udalo mi sie z uzyciem confussion matrix
                         // z powodu uplywajacego terminu pozostawiam jako uwage
                         oob_score = Some(1.0);
