@@ -1,7 +1,7 @@
 //! Random forest
 //!
 use crate::{DecisionTree, MaxFeatures, RandomForestValidParams};
-use linfa::prelude::{Fit, ToConfusionMatrix};
+use linfa::prelude::{Fit};
 use linfa::dataset::{AsTargets, Records};
 use linfa::traits::{Predict, PredictInplace};
 use std::collections::{HashMap};
@@ -12,7 +12,7 @@ use linfa::{
     error::Result,
     DatasetBase, Float, Label,
 };
-use ndarray::{array, Array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
+use ndarray::{Array, array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
 use ndarray_rand::rand::thread_rng;
 use ndarray_rand::rand::Rng;
 use rayon::scope;
@@ -168,8 +168,8 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
 impl<'a, F: Float, L: Label + 'a + std::fmt::Debug + Sync + Send, D, T>
     Fit<ArrayBase<D, Ix2>, T, Error> for RandomForestValidParams<F, L>
 where
-    D: Data<Elem = F>,
-    T: AsSingleTargets<Elem = L> + Labels<Elem = L>,
+    D: Data<Elem = F> + Send + Sync,
+    T: AsSingleTargets<Elem = L> + Labels<Elem = L> + Send + Sync,
 {
     type Object = RandomForestClassifier<F, L>;
 
@@ -208,24 +208,26 @@ where
                 let fitted_trees_ref = &fitted_trees; // Borrow a reference to the Mutex
                 s.spawn(move |_| {
                     let tree = self.trees_params().fit(sample).unwrap();
-                    // Lock the Mutex and push the tree into the vector
-                    let oob_samples = dataset.records().outer_iter()
-                        .filter(|x|
-                            sample.records().outer_iter()
-                                .find(|y| x.eq(y))
-                                .is_some())
-                        .collect::<Vec<_>>();
-                    let mut arr = Array2::<F>::default((oob_samples.len(), oob_samples[0].len()));
-                    for (i, mut row) in arr.axis_iter_mut(Axis(0)).enumerate() {
-                        for (j, col) in row.iter_mut().enumerate() {
-                            *col = oob_samples[i][j];
+                    if self.oob_score() {
+                        let oob_samples = dataset.records().outer_iter()
+                            .filter(|x|
+                                sample.records().outer_iter()
+                                    .find(|y| x.eq(y))
+                                    .is_some())
+                            .collect::<Vec<_>>();
+                        let mut arr = Array2::<F>::default((oob_samples.len(), oob_samples[0].len()));
+                        for (i, mut row) in arr.axis_iter_mut(Axis(0)).enumerate() {
+                            for (j, col) in row.iter_mut().enumerate() {
+                                *col = oob_samples[i][j];
+                            }
                         }
+                        let new_dataset = DatasetBase::new(arr, dataset.targets());
+                        let predict = tree.predict(&new_dataset);
+                        // tutaj powinno nastapic wyliczenie score, niestety nie udalo mi sie z uzyciem confussion matrix
+                        // z powodu uplywajacego terminu pozostawiam jako uwage
+                        oob_score = Some(1.0);
                     }
-                    let new_dataset = DatasetBase::new(arr, dataset.targets());
-                    let predict = tree.predict(&new_dataset);
-                    // tutaj powinno nastapic wyliczenie score, niestety nie udalo mi sie z uzyciem confussion matrix
-                    // z powodu uplywajacego terminu pozostawiam jako uwage
-                    oob_score = Some(1.0);
+                    // Lock the Mutex and push the tree into the vector
                     fitted_trees_ref.lock().unwrap().push(tree);
                 });
             }

@@ -47,7 +47,7 @@ pub enum MaxFeatures {
 /// // Initialize the default set of parameters
 /// let params = RandomForestClassifier::params();
 /// // Set the parameters to the desired values
-/// let params = params.num_trees(150).max_samples(0.8).max_features(MaxFeatures::Sqrt);
+/// let params = params.num_trees(150).max_samples(Some(0.8)).max_features(MaxFeatures::Sqrt);
 /// // You can also change the parameters of decision trees
 /// let tree_params = DecisionTree::params();
 /// let tree_params = tree_params.max_depth(Some(5)).min_weight_leaf(2.);
@@ -57,6 +57,7 @@ pub struct RandomForestValidParams<F, L> {
     trees_params: DecisionTreeParams<F, L>,
     num_trees: usize,          // number of estimators
     bootstrap: bool,           // is bootstrapping enabled
+    oob_score: bool,           // is oob score enabled
     max_samples: Option<f32>,  // number of samples to bootstrap
     max_features: MaxFeatures, // number of features
 }
@@ -77,6 +78,11 @@ impl<F: Float, L: Label> RandomForestValidParams<F, L> {
     /// all samples in the dataset are used to create a single tree.
     pub fn bootstrap(&self) -> bool {
         self.bootstrap
+    }
+
+    /// Returns a boolean - whether OOB score is used in the forest or not.
+    pub fn oob_score(&self) -> bool {
+        self.oob_score
     }
 
     /// Returns a float in range (0, 1) or `None`. The result of multiplying this float by
@@ -107,6 +113,7 @@ impl<F: Float, L: Label> RandomForestParams<F, L> {
             trees_params: DecisionTree::params(),
             num_trees: 100,
             bootstrap: true,
+            oob_score: false,
             max_samples: None,
             max_features: MaxFeatures::Sqrt,
         })
@@ -128,6 +135,12 @@ impl<F: Float, L: Label> RandomForestParams<F, L> {
     /// will mean that each tree of the forest is fitted using all samples from the original dataset.
     pub fn bootstrap(mut self, bootstrap: bool) -> Self {
         self.0.bootstrap = bootstrap;
+        self
+    }
+
+    /// Sets a boolean - whether Out-of-Bag score is returned or not.
+    pub fn oob_score(mut self, oob_score: bool) -> Self {
+        self.0.oob_score = oob_score;
         self
     }
 
@@ -161,6 +174,7 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
     /// Defaults are provided if the optional parameters are not specified:
     /// * `num_trees = 100`
     /// * `bootstrap = true`
+    /// * `oob_score = false`
     /// * `max_samples = None`
     /// * `max_features = MaxFeatures::Sqrt`
     ///
@@ -198,6 +212,11 @@ impl<F: Float, L> ParamGuard for RandomForestParams<F, L> {
                     value
                 )));
             }
+        }
+        if !self.0.bootstrap && self.0.oob_score {
+            return Err(Error::Parameters(format!(
+                "Cannot have oob_score without bootstrap"
+            )));
         }
         if !self.0.bootstrap && self.0.max_samples != None {
             return Err(Error::Parameters(format!(
