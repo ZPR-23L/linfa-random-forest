@@ -2,11 +2,9 @@
 //!
 use crate::{DecisionTree, MaxFeatures, RandomForestValidParams};
 use linfa::prelude::{Fit, ToConfusionMatrix};
+use linfa::dataset::{AsTargets, Records};
 use linfa::traits::{Predict, PredictInplace};
 use std::collections::{HashMap};
-use ndarray::{Array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
-use ndarray_rand::rand::Rng;
-use ndarray_rand::rand::thread_rng;
 use ndarray_rand::rand::seq::IteratorRandom;
 use linfa::{
     dataset::{AsSingleTargets, Labels},
@@ -14,8 +12,11 @@ use linfa::{
     error::Result,
     DatasetBase, Float, Label,
 };
-use linfa::dataset::{AsTargets, Records};
-
+use ndarray::{array, Array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
+use ndarray_rand::rand::thread_rng;
+use ndarray_rand::rand::Rng;
+use rayon::scope;
+use std::sync::{Arc, Mutex};
 
 /// A random forest model for classification
 ///
@@ -57,6 +58,12 @@ use linfa::dataset::{AsTargets, Records};
 /// let accuracy = forest.predict(&dataset).confusion_matrix(&dataset).unwrap().accuracy();
 /// ```
 
+#[cfg_attr(
+    feature = "serde",
+    derive(Serialize, Deserialize),
+    serde(crate = "serde_crate")
+)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RandomForestClassifier<F: Float, L: Label> {
     trees: Vec<DecisionTree<F, L>>, // collection of fitted decision trees of the forest
     oob_score: Option<f64>,
@@ -68,7 +75,7 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
         dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
         num_trees: usize,
         max_samples: usize,
-        max_features: usize
+        max_features: usize,
     ) -> Vec<DatasetBase<Array<F, Ix2>, Array<L, Ix1>>> {
         let mut bootstrapped_samples = Vec::new();
 
@@ -131,7 +138,7 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
     fn bootstrap_features<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(
         dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
         num_trees: usize,
-        max_features: usize
+        max_features: usize,
     ) -> Vec<DatasetBase<Array<F, Ix2>, Array<L, Ix1>>> {
         let mut bootstrapped_features = Vec::new();
 
@@ -158,8 +165,8 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
     }
 }
 
-impl<'a, F: Float, L: Label + 'a + std::fmt::Debug, D, T> Fit<ArrayBase<D, Ix2>, T, Error>
-    for RandomForestValidParams<F, L>
+impl<'a, F: Float, L: Label + 'a + std::fmt::Debug + Sync + Send, D, T>
+    Fit<ArrayBase<D, Ix2>, T, Error> for RandomForestValidParams<F, L>
 where
     D: Data<Elem = F>,
     T: AsSingleTargets<Elem = L> + Labels<Elem = L>,
@@ -168,7 +175,7 @@ where
 
     /// Using specified hyperparameters, fit a random forest on a dataset with a matrix of features and an array of labels
     fn fit(&self, dataset: &DatasetBase<ArrayBase<D, Ix2>, T>) -> Result<Self::Object> {
-        let mut fitted_trees: Vec<DecisionTree<F, L>> = Vec::new();
+        let fitted_trees = Mutex::new(Vec::new());
 
         let num_features = dataset.feature_names().len();
         let bootstrap_features = match self.max_features() {
@@ -193,32 +200,38 @@ where
         } else {
             Self::Object::bootstrap_features(&dataset, self.num_trees(), bootstrap_features)
         };
-
         let mut oob_score = None;
-        for sample in &samples {
-            let tree = self.trees_params().fit(&sample)?;
-            if self.oob_score() {
-                let oob_samples = dataset.records().outer_iter()
-                    .filter(|x|
-                        sample.records().outer_iter()
-                            .find(|y| x.eq(y))
-                            .is_some())
-                    .collect::<Vec<_>>();
-                let mut arr = Array2::<F>::default((oob_samples.len(), oob_samples[0].len()));
-                for (i, mut row) in arr.axis_iter_mut(Axis(0)).enumerate() {
-                    for (j, col) in row.iter_mut().enumerate() {
-                        *col = oob_samples[i][j];
-                    }
-                }
-                let new_dataset = DatasetBase::new(arr, dataset.targets());
-                let predict = tree.predict(&new_dataset);
-                // tutaj powinno nastapic wyliczenie score, niestety nie udalo mi sie z uzyciem confussion matrix
-                // z powodu uplywajacego terminu pozostawiam jako uwage
-                oob_score = Some(1.0);
-            }
-            fitted_trees.push(tree);
-        }
 
+        // Using concurrency for fitting trees
+        scope(|s| {
+            for sample in samples.iter() {
+                let fitted_trees_ref = &fitted_trees; // Borrow a reference to the Mutex
+                s.spawn(move |_| {
+                    let tree = self.trees_params().fit(sample).unwrap();
+                    // Lock the Mutex and push the tree into the vector
+                    let oob_samples = dataset.records().outer_iter()
+                        .filter(|x|
+                            sample.records().outer_iter()
+                                .find(|y| x.eq(y))
+                                .is_some())
+                        .collect::<Vec<_>>();
+                    let mut arr = Array2::<F>::default((oob_samples.len(), oob_samples[0].len()));
+                    for (i, mut row) in arr.axis_iter_mut(Axis(0)).enumerate() {
+                        for (j, col) in row.iter_mut().enumerate() {
+                            *col = oob_samples[i][j];
+                        }
+                    }
+                    let new_dataset = DatasetBase::new(arr, dataset.targets());
+                    let predict = tree.predict(&new_dataset);
+                    // tutaj powinno nastapic wyliczenie score, niestety nie udalo mi sie z uzyciem confussion matrix
+                    // z powodu uplywajacego terminu pozostawiam jako uwage
+                    oob_score = Some(1.0);
+                    fitted_trees_ref.lock().unwrap().push(tree);
+                });
+            }
+        });
+
+        let fitted_trees = fitted_trees.into_inner().unwrap();
 
         Ok(RandomForestClassifier {
             trees: fitted_trees,
@@ -227,7 +240,7 @@ where
     }
 }
 
-impl<F: Float, L: Label + Default, D: Data<Elem = F>>
+impl<F: Float, L: Label + Default + Copy + Send + Sync, D: Data<Elem = F> + Send + Sync>
     PredictInplace<ArrayBase<D, Ix2>, Array1<L>> for RandomForestClassifier<F, L>
 {
     /// Make predictions for each row of a matrix of features `x`.
@@ -239,12 +252,21 @@ impl<F: Float, L: Label + Default, D: Data<Elem = F>>
         );
 
         // 2D array holds predictions for each row of `x` from every tree
-        let mut trees_targets = Array2::<L>::default((0, x.nrows()));
+        let trees_targets = Arc::new(Mutex::new(Array2::<L>::default((0, x.nrows()))));
 
-        for tree in &self.trees {
-            let targets = tree.predict(x);
-            trees_targets.push_row(targets.view()).unwrap();
-        }
+        // Each tree makes a prediction concurrently
+        scope(|s| {
+            for tree in &self.trees {
+                let trees_targets = Arc::clone(&trees_targets);
+                s.spawn(move |_| {
+                    let targets = tree.predict(x);
+                    let mut trees_targets = trees_targets.lock().unwrap();
+                    trees_targets.push_row(targets.view()).unwrap();
+                });
+            }
+        });
+
+        let trees_targets = trees_targets.lock().unwrap();
 
         // Search for most frequent label in each column
         for (idx, target) in y.iter_mut().enumerate() {
@@ -267,19 +289,26 @@ fn most_common<L: std::hash::Hash + Eq>(targets: Array1<L>) -> L {
     most_common
 }
 
+#[test]
+fn test_most_common() {
+    let test_array = array![1, 2, 1, 1, 4, 1, 2, 2, 2, 1];
+    let most_common_val = most_common(test_array);
+    assert_eq!(most_common_val, 1);
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
         DecisionTree, MaxFeatures, RandomForestClassifier, RandomForestParams,
         RandomForestValidParams, SplitQuality,
     };
+    use linfa::dataset::Records;
+    use linfa::traits::{Fit, PredictInplace};
+    use linfa::Dataset;
     use linfa::ParamGuard;
-    use ndarray::{array};
+    use ndarray::array;
     use ndarray_rand::rand::SeedableRng;
     use rand::prelude::SmallRng;
-    use linfa::dataset::Records;
-    use linfa::Dataset;
-    use linfa::traits::{Fit, PredictInplace};
 
     #[test]
     fn autotraits() {
@@ -440,7 +469,9 @@ mod tests {
         let bootstrapped = RandomForestClassifier::bootstrap_samples(&dataset, 10, 10);
         assert_eq!(bootstrapped.len(), 10);
         assert!(bootstrapped.iter().all(|x| x.nsamples() == 10));
-        assert!(bootstrapped.iter().all(|x| x.nfeatures() == dataset.nfeatures()));
+        assert!(bootstrapped
+            .iter()
+            .all(|x| x.nfeatures() == dataset.nfeatures()));
     }
 
     #[test]
@@ -476,7 +507,9 @@ mod tests {
         let dataset = Dataset::new(data, targets);
         let bootstrapped = RandomForestClassifier::bootstrap_features(&dataset, 10, 10);
         assert_eq!(bootstrapped.len(), 10);
-        assert!(bootstrapped.iter().all(|x| x.nsamples() == dataset.nsamples()));
+        assert!(bootstrapped
+            .iter()
+            .all(|x| x.nsamples() == dataset.nsamples()));
         assert!(bootstrapped.iter().all(|x| x.nfeatures() == 10));
     }
 
@@ -484,7 +517,7 @@ mod tests {
     fn fit_test() {
         let mut rng = SmallRng::seed_from_u64(42);
 
-        let (train, test) = linfa_datasets::iris()
+        let (train, _) = linfa_datasets::iris()
             .shuffle(&mut rng)
             .split_with_ratio(0.8);
         let classifier_model = RandomForestClassifier::params().fit(&train);
@@ -505,7 +538,7 @@ mod tests {
     fn predict_inplace_test() {
         let mut rng = SmallRng::seed_from_u64(42);
 
-        let (train, test) = linfa_datasets::iris()
+        let (train, _) = linfa_datasets::iris()
             .shuffle(&mut rng)
             .split_with_ratio(0.8);
         let classifier_model = RandomForestClassifier::params().fit(&train).unwrap();

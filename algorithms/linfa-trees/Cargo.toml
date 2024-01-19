@@ -28,6 +28,8 @@ ndarray = { version = "0.15" , features = ["rayon", "approx"]}
 ndarray-rand = "0.14"
 
 linfa = { version = "0.7.0", path = "../.." }
+statrs = "0.16.0"
+rayon = "1.8.0"
 
 [dev-dependencies]
 rand = { version = "0.8", features = ["small_rng"] }
@@ -38,4 +40,8 @@ linfa = { version = "0.7.0", path = "../..", features = ["benchmarks"] }
 
 [[bench]]
 name = "decision_tree"
+harness = false
+
+[[bench]]
+name = "random_forest"
 harness = false
