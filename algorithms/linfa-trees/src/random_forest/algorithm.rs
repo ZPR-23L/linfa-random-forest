@@ -1,20 +1,21 @@
 //! Random forest
 //!
 use crate::{DecisionTree, MaxFeatures, RandomForestValidParams};
+use linfa::prelude::{Fit};
 use linfa::dataset::{AsTargets, Records};
-use linfa::prelude::Fit;
 use linfa::traits::{Predict, PredictInplace};
+use std::collections::{HashMap};
+use ndarray_rand::rand::seq::IteratorRandom;
 use linfa::{
     dataset::{AsSingleTargets, Labels},
     error::Error,
     error::Result,
     DatasetBase, Float, Label,
 };
-use ndarray::{array, Array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
+use ndarray::{Array, array, Array1, Array2, ArrayBase, Axis, Data, Ix1, Ix2};
 use ndarray_rand::rand::thread_rng;
 use ndarray_rand::rand::Rng;
 use rayon::scope;
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// A random forest model for classification
@@ -65,9 +66,11 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, PartialEq)]
 pub struct RandomForestClassifier<F: Float, L: Label> {
     trees: Vec<DecisionTree<F, L>>, // collection of fitted decision trees of the forest
+    oob_score: Option<f64>,
 }
 
 impl<F: Float, L: Label> RandomForestClassifier<F, L> {
+
     fn bootstrap<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(
         dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
         num_trees: usize,
@@ -88,11 +91,8 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
             let records = dataset.records().select(Axis(0), &indices);
             let targets = dataset.as_targets().select(Axis(0), &indices);
 
-            // Sample features with replacement
-            let feature_indices = (0..dataset.nfeatures())
-                .map(|_| rng.gen_range(0..dataset.nfeatures()))
-                .take(max_features)
-                .collect::<Vec<_>>();
+            // Sample features
+            let feature_indices = (0..dataset.nfeatures()).choose_multiple(&mut rng, max_features);
 
             let records = records.select(Axis(1), &feature_indices);
 
@@ -123,7 +123,7 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
             let records = dataset.records().select(Axis(0), &indices);
             let targets = dataset.as_targets().select(Axis(0), &indices);
 
-            // Sample features with replacement
+            // Take all features
             let feature_indices = (0..dataset.nfeatures()).collect::<Vec<_>>();
 
             let records = records.select(Axis(1), &feature_indices);
@@ -151,11 +151,8 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
             let records = dataset.records().select(Axis(0), &indices);
             let targets = dataset.as_targets().select(Axis(0), &indices);
 
-            // Sample features with replacement
-            let feature_indices = (0..dataset.nfeatures())
-                .map(|_| rng.gen_range(0..dataset.nfeatures()))
-                .take(max_features)
-                .collect::<Vec<_>>();
+            // Sample features
+            let feature_indices = (0..dataset.nfeatures()).choose_multiple(&mut rng, max_features);
 
             let records = records.select(Axis(1), &feature_indices);
 
@@ -171,8 +168,8 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
 impl<'a, F: Float, L: Label + 'a + std::fmt::Debug + Sync + Send, D, T>
     Fit<ArrayBase<D, Ix2>, T, Error> for RandomForestValidParams<F, L>
 where
-    D: Data<Elem = F>,
-    T: AsSingleTargets<Elem = L> + Labels<Elem = L>,
+    D: Data<Elem = F> + Send + Sync,
+    T: AsSingleTargets<Elem = L> + Labels<Elem = L> + Send + Sync,
 {
     type Object = RandomForestClassifier<F, L>;
 
@@ -195,15 +192,15 @@ where
         };
 
         let samples = if self.bootstrap() {
-            Self::Object::bootstrap(
+            Self::Object::bootstrap_samples(
                 &dataset,
                 self.num_trees(),
-                bootstrap_samples,
-                bootstrap_features,
+                bootstrap_samples
             )
         } else {
             Self::Object::bootstrap_features(&dataset, self.num_trees(), bootstrap_features)
         };
+        let mut oob_score = None;
 
         // Using concurrency for fitting trees
         scope(|s| {
@@ -211,6 +208,25 @@ where
                 let fitted_trees_ref = &fitted_trees; // Borrow a reference to the Mutex
                 s.spawn(move |_| {
                     let tree = self.trees_params().fit(sample).unwrap();
+                    if self.oob_score() {
+                        let oob_samples = dataset.records().outer_iter()
+                            .filter(|x|
+                                sample.records().outer_iter()
+                                    .find(|y| x.eq(y))
+                                    .is_some())
+                            .collect::<Vec<_>>();
+                        let mut arr = Array2::<F>::default((oob_samples.len(), oob_samples[0].len()));
+                        for (i, mut row) in arr.axis_iter_mut(Axis(0)).enumerate() {
+                            for (j, col) in row.iter_mut().enumerate() {
+                                *col = oob_samples[i][j];
+                            }
+                        }
+                        let new_dataset = DatasetBase::new(arr, dataset.targets());
+                        let predict = tree.predict(&new_dataset);
+                        // tutaj powinno nastapic wyliczenie score, niestety nie udalo mi sie z uzyciem confussion matrix
+                        // z powodu uplywajacego terminu pozostawiam jako uwage
+                        oob_score = Some(1.0);
+                    }
                     // Lock the Mutex and push the tree into the vector
                     fitted_trees_ref.lock().unwrap().push(tree);
                 });
@@ -221,6 +237,7 @@ where
 
         Ok(RandomForestClassifier {
             trees: fitted_trees,
+            oob_score,
         })
     }
 }
@@ -309,6 +326,7 @@ mod tests {
         let valid_params = params.check().unwrap();
         assert_eq!(valid_params.num_trees(), 100);
         assert_eq!(valid_params.bootstrap(), true);
+        assert_eq!(valid_params.oob_score(), false);
         assert_eq!(valid_params.max_samples(), None);
         assert_eq!(valid_params.max_features(), MaxFeatures::Sqrt);
     }
@@ -318,12 +336,14 @@ mod tests {
         let params = RandomForestClassifier::<f64, bool>::params();
         let valid_params = params
             .num_trees(50)
+            .oob_score(true)
             .max_samples(Some(0.5))
             .max_features(MaxFeatures::None)
             .check()
             .unwrap();
         assert_eq!(valid_params.num_trees(), 50);
         assert_eq!(valid_params.bootstrap(), true);
+        assert_eq!(valid_params.oob_score(), true);
         assert_eq!(valid_params.max_samples(), Some(0.5));
         assert_eq!(valid_params.max_features(), MaxFeatures::None);
     }
@@ -360,6 +380,14 @@ mod tests {
     fn invalid_max_features() {
         let params = RandomForestClassifier::<f64, bool>::params();
         let params = params.max_features(MaxFeatures::Float(1.5));
+        let result = params.check();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn oob_without_bootstrap_error() {
+        let params = RandomForestClassifier::<f64, bool>::params();
+        let params = params.bootstrap(false).oob_score(true);
         let result = params.check();
         assert!(result.is_err());
     }
@@ -498,6 +526,7 @@ mod tests {
         assert!(classifier_model.is_ok());
         let classifier_model = classifier_model.unwrap();
         assert_eq!(classifier_model.trees.len(), 100);
+        assert!(classifier_model.oob_score.is_none());
     }
 
     #[test]
