@@ -7,7 +7,7 @@ fn main() -> Result<()> {
     // Load dataset
     let mut rng = SmallRng::seed_from_u64(42);
 
-    let (train, test) = linfa_datasets::iris()
+    let (train, test) = linfa_datasets::winequality()
         .shuffle(&mut rng)
         .split_with_ratio(0.8);
 

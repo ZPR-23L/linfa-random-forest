@@ -67,6 +67,11 @@ pub struct DecisionTreeValidParams<F, L> {
     min_impurity_decrease: F,
 
     label_marker: PhantomData<L>,
+
+    // this param is only accessible in this crate
+    // used for random forest - specifies the number of randomly selected features
+    // used to create each tree node
+    max_features: Option<usize>,
 }
 
 impl<F: Float, L> DecisionTreeValidParams<F, L> {
@@ -89,6 +94,10 @@ impl<F: Float, L> DecisionTreeValidParams<F, L> {
     pub fn min_impurity_decrease(&self) -> F {
         self.min_impurity_decrease
     }
+
+    pub(crate) fn max_features(&self) -> Option<usize> {
+        self.max_features
+    }
 }
 
 #[cfg_attr(
@@ -108,6 +117,7 @@ impl<F: Float, L: Label> DecisionTreeParams<F, L> {
             min_weight_leaf: 1.0,
             min_impurity_decrease: F::cast(0.00001),
             label_marker: PhantomData,
+            max_features: None,
         })
     }
 
@@ -144,6 +154,11 @@ impl<F: Float, L: Label> DecisionTreeParams<F, L> {
     /// Sets the minimum decrease in impurity that a split needs to bring in order for it to be applied
     pub fn min_impurity_decrease(mut self, min_impurity_decrease: F) -> Self {
         self.0.min_impurity_decrease = min_impurity_decrease;
+        self
+    }
+
+    pub(crate) fn max_features(mut self, max_features: Option<usize>) -> Self {
+        self.0.max_features = max_features;
         self
     }
 }

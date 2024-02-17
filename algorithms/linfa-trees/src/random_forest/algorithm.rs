@@ -1,11 +1,10 @@
 //! Random forest
 //!
 use crate::{DecisionTree, MaxFeatures, RandomForestValidParams};
-use linfa::prelude::{Fit};
+use linfa::prelude::Fit;
 use linfa::dataset::{AsTargets, Records};
 use linfa::traits::{Predict, PredictInplace};
-use std::collections::{HashMap};
-use ndarray_rand::rand::seq::IteratorRandom;
+use std::collections::HashMap;
 use linfa::{
     dataset::{AsSingleTargets, Labels},
     error::Error,
@@ -79,7 +78,6 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
         dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
         num_trees: usize,
         max_samples: usize,
-        max_features: usize,
     ) -> Vec<DatasetBase<Array<F, Ix2>, Array<L, Ix1>>> {
         let mut bootstrapped_samples = Vec::new();
 
@@ -95,77 +93,12 @@ impl<F: Float, L: Label> RandomForestClassifier<F, L> {
             let records = dataset.records().select(Axis(0), &indices);
             let targets = dataset.as_targets().select(Axis(0), &indices);
 
-            // Sample features
-            let feature_indices = (0..dataset.nfeatures()).choose_multiple(&mut rng, max_features);
-
-            let records = records.select(Axis(1), &feature_indices);
-
             // Create a bootstrapped dataset
-            let bootstrapped_dataset = DatasetBase::new(records, targets);
+            let bootstrapped_dataset = DatasetBase::new(records, targets)
+                .with_feature_names(dataset.feature_names());
             bootstrapped_samples.push(bootstrapped_dataset);
         }
-
         bootstrapped_samples
-    }
-
-    fn bootstrap_samples<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(
-        dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
-        num_trees: usize,
-        max_samples: usize,
-    ) -> Vec<DatasetBase<Array<F, Ix2>, Array<L, Ix1>>> {
-        let mut bootstrapped_samples = Vec::new();
-
-        for _ in 0..num_trees {
-            let mut rng = thread_rng();
-
-            // Sample with replacement
-            let indices = (0..dataset.nsamples())
-                .map(|_| rng.gen_range(0..dataset.nsamples()))
-                .take(max_samples)
-                .collect::<Vec<_>>();
-
-            let records = dataset.records().select(Axis(0), &indices);
-            let targets = dataset.as_targets().select(Axis(0), &indices);
-
-            // Take all features
-            let feature_indices = (0..dataset.nfeatures()).collect::<Vec<_>>();
-
-            let records = records.select(Axis(1), &feature_indices);
-
-            // Create a bootstrapped dataset
-            let bootstrapped_dataset = DatasetBase::new(records, targets);
-            bootstrapped_samples.push(bootstrapped_dataset);
-        }
-
-        bootstrapped_samples
-    }
-    fn bootstrap_features<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(
-        dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
-        num_trees: usize,
-        max_features: usize,
-    ) -> Vec<DatasetBase<Array<F, Ix2>, Array<L, Ix1>>> {
-        let mut bootstrapped_features = Vec::new();
-
-        for _ in 0..num_trees {
-            let mut rng = thread_rng();
-
-            // Sample with replacement
-            let indices = (0..dataset.nsamples()).collect::<Vec<_>>();
-
-            let records = dataset.records().select(Axis(0), &indices);
-            let targets = dataset.as_targets().select(Axis(0), &indices);
-
-            // Sample features
-            let feature_indices = (0..dataset.nfeatures()).choose_multiple(&mut rng, max_features);
-
-            let records = records.select(Axis(1), &feature_indices);
-
-            // Create a bootstrapped dataset
-            let bootstrapped_dataset = DatasetBase::new(records, targets);
-            bootstrapped_features.push(bootstrapped_dataset);
-        }
-
-        bootstrapped_features
     }
 }
 
@@ -182,7 +115,7 @@ where
         let fitted_trees = Mutex::new(Vec::new());
 
         let num_features = dataset.feature_names().len();
-        let bootstrap_features = match self.max_features() {
+        let max_features = match self.max_features() {
             MaxFeatures::Sqrt => f64::sqrt(num_features as f64) as usize,
             MaxFeatures::Log2 => f64::log2(num_features as f64) as usize,
             MaxFeatures::Float(n) => std::cmp::max(1, ((num_features as f32) * n) as usize),
@@ -190,20 +123,20 @@ where
         };
 
         let num_samples = dataset.records().len();
-        let bootstrap_samples = match self.max_samples() {
+        let max_samples = match self.max_samples() {
             Some(n) => std::cmp::max(1, ((num_samples as f32) * n) as usize),
             None => num_samples,
         };
 
         let samples = if self.bootstrap() {
-            Self::Object::bootstrap_samples(
-                &dataset,
-                self.num_trees(),
-                bootstrap_samples
-            )
-        } else {
-            Self::Object::bootstrap_features(&dataset, self.num_trees(), bootstrap_features)
-        };
+            Self::Object::bootstrap(&dataset, self.num_trees(), max_samples)} else {
+                vec![DatasetBase::new(
+                        dataset.records().to_owned(),
+                        dataset.as_targets().to_owned()
+                    ).with_feature_names(dataset.feature_names());
+                    self.num_trees()]
+            };
+
         let mut oob_score = None;
 
         // Using concurrency for fitting trees
@@ -211,26 +144,10 @@ where
             for sample in samples.iter() {
                 let fitted_trees_ref = &fitted_trees; // Borrow a reference to the Mutex
                 s.spawn(move |_| {
-                    let tree = self.trees_params().fit(sample).unwrap();
-                    if self.oob_score() {
-                        let oob_samples = dataset.records().outer_iter()
-                            .filter(|x|
-                                sample.records().outer_iter()
-                                    .find(|y| x.eq(y))
-                                    .is_some())
-                            .collect::<Vec<_>>();
-                        let mut arr = Array2::<F>::default((oob_samples.len(), oob_samples[0].len()));
-                        for (i, mut row) in arr.axis_iter_mut(Axis(0)).enumerate() {
-                            for (j, col) in row.iter_mut().enumerate() {
-                                *col = oob_samples[i][j];
-                            }
-                        }
-                        let new_dataset = DatasetBase::new(arr, dataset.targets());
-                        let _predict = tree.predict(&new_dataset);
-                        // tutaj powinno nastapic wyliczenie score, niestety nie udalo mi sie z uzyciem confussion matrix
-                        // z powodu uplywajacego terminu pozostawiam jako uwage
-                        oob_score = Some(1.0);
-                    }
+                    let tree = self.trees_params()
+                        .max_features(Some(max_features))
+                        .fit(sample).unwrap();
+
                     // Lock the Mutex and push the tree into the vector
                     fitted_trees_ref.lock().unwrap().push(tree);
                 });
@@ -295,12 +212,6 @@ fn most_common<L: std::hash::Hash + Eq>(targets: Array1<L>) -> L {
     most_common
 }
 
-#[test]
-fn test_most_common() {
-    let test_array = array![1, 2, 1, 1, 4, 1, 2, 2, 2, 1];
-    let most_common_val = most_common(test_array);
-    assert_eq!(most_common_val, 1);
-}
 
 #[cfg(test)]
 mod tests {
@@ -435,88 +346,9 @@ mod tests {
         let targets = array![1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0];
 
         let dataset = Dataset::new(data, targets);
-        let bootstrapped = RandomForestClassifier::bootstrap(&dataset, 10, 10, 10);
+        let bootstrapped = RandomForestClassifier::bootstrap(&dataset, 10, 10);
         assert_eq!(bootstrapped.len(), 10);
         assert!(bootstrapped.iter().all(|x| x.nsamples() == 10));
-        assert!(bootstrapped.iter().all(|x| x.nfeatures() == 10));
-    }
-
-    #[test]
-    fn bootstrap_samples_test() {
-        let data = array![
-            [0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 1.0, -14.0, 0.0, -4.0, 0.0, 0.0, 0.0, 0.0,],
-            [0.0, 0.0, 5.0, 3.0, 0.0, -4.0, 0.0, 0.0, 1.0, -5.0, 0.2, 0.0, 4.0, 1.0,],
-            [-1.0, -1.0, 0.0, 0.0, -4.5, 0.0, 0.0, 2.1, 1.0, 0.0, 0.0, -4.5, 0.0, 1.0,],
-            [-1.0, -1.0, 0.0, -1.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 1.0,],
-            [-1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,],
-            [-1.0, -2.0, 0.0, 4.0, -3.0, 10.0, 4.0, 0.0, -3.2, 0.0, 4.0, 3.0, -4.0, 1.0,],
-            [2.11, 0.0, -6.0, -0.5, 0.0, 11.0, 0.0, 0.0, -3.2, 6.0, 0.5, 0.0, -3.0, 1.0,],
-            [2.11, 0.0, -6.0, -0.5, 0.0, 11.0, 0.0, 0.0, -3.2, 6.0, 0.0, 0.0, -2.0, 1.0,],
-            [2.11, 8.0, -6.0, -0.5, 0.0, 11.0, 0.0, 0.0, -3.2, 6.0, 0.0, 0.0, -2.0, 1.0,],
-            [2.11, 8.0, -6.0, -0.5, 0.0, 11.0, 0.0, 0.0, -3.2, 6.0, 0.5, 0.0, -1.0, 0.0,],
-            [2.0, 8.0, 5.0, 1.0, 0.5, -4.0, 10.0, 0.0, 1.0, -5.0, 3.0, 0.0, 2.0, 0.0,],
-            [2.0, 0.0, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.0, -2.0, 3.0, 0.0, 1.0, 0.0,],
-            [2.0, 0.0, 1.0, 2.0, 3.0, -1.0, 10.0, 2.0, 0.0, -1.0, 1.0, 2.0, 2.0, 0.0,],
-            [1.0, 1.0, 0.0, 2.0, 2.0, -1.0, 1.0, 2.0, 0.0, -5.0, 1.0, 2.0, 3.0, 0.0,],
-            [3.0, 1.0, 0.0, 3.0, 0.0, -4.0, 10.0, 0.0, 1.0, -5.0, 3.0, 0.0, 3.0, 1.0,],
-            [2.11, 8.0, -6.0, -0.5, 0.0, 1.0, 0.0, 0.0, -3.2, 6.0, 0.5, 0.0, -3.0, 1.0,],
-            [2.11, 8.0, -6.0, -0.5, 0.0, 1.0, 0.0, 0.0, -3.2, 6.0, 1.5, 1.0, -1.0, -1.0,],
-            [2.11, 8.0, -6.0, -0.5, 0.0, 10.0, 0.0, 0.0, -3.2, 6.0, 0.5, 0.0, -1.0, -1.0,],
-            [2.0, 0.0, 5.0, 1.0, 0.5, -2.0, 10.0, 0.0, 1.0, -5.0, 3.0, 1.0, 0.0, -1.0,],
-            [2.0, 0.0, 1.0, 1.0, 1.0, -2.0, 1.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 1.0,],
-            [2.0, 1.0, 1.0, 1.0, 2.0, -1.0, 10.0, 2.0, 0.0, -1.0, 0.0, 2.0, 1.0, 1.0,],
-            [1.0, 1.0, 0.0, 0.0, 1.0, -3.0, 1.0, 2.0, 0.0, -5.0, 1.0, 2.0, 1.0, 1.0,],
-            [3.0, 1.0, 0.0, 1.0, 0.0, -4.0, 1.0, 0.0, 1.0, -2.0, 0.0, 0.0, 1.0, 0.0,]
-        ];
-
-        let targets = array![1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0];
-
-        let dataset = Dataset::new(data, targets);
-        let bootstrapped = RandomForestClassifier::bootstrap_samples(&dataset, 10, 10);
-        assert_eq!(bootstrapped.len(), 10);
-        assert!(bootstrapped.iter().all(|x| x.nsamples() == 10));
-        assert!(bootstrapped
-            .iter()
-            .all(|x| x.nfeatures() == dataset.nfeatures()));
-    }
-
-    #[test]
-    fn bootstrap_features_test() {
-        let data = array![
-            [0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 1.0, -14.0, 0.0, -4.0, 0.0, 0.0, 0.0, 0.0,],
-            [0.0, 0.0, 5.0, 3.0, 0.0, -4.0, 0.0, 0.0, 1.0, -5.0, 0.2, 0.0, 4.0, 1.0,],
-            [-1.0, -1.0, 0.0, 0.0, -4.5, 0.0, 0.0, 2.1, 1.0, 0.0, 0.0, -4.5, 0.0, 1.0,],
-            [-1.0, -1.0, 0.0, -1.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 1.0,],
-            [-1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,],
-            [-1.0, -2.0, 0.0, 4.0, -3.0, 10.0, 4.0, 0.0, -3.2, 0.0, 4.0, 3.0, -4.0, 1.0,],
-            [2.11, 0.0, -6.0, -0.5, 0.0, 11.0, 0.0, 0.0, -3.2, 6.0, 0.5, 0.0, -3.0, 1.0,],
-            [2.11, 0.0, -6.0, -0.5, 0.0, 11.0, 0.0, 0.0, -3.2, 6.0, 0.0, 0.0, -2.0, 1.0,],
-            [2.11, 8.0, -6.0, -0.5, 0.0, 11.0, 0.0, 0.0, -3.2, 6.0, 0.0, 0.0, -2.0, 1.0,],
-            [2.11, 8.0, -6.0, -0.5, 0.0, 11.0, 0.0, 0.0, -3.2, 6.0, 0.5, 0.0, -1.0, 0.0,],
-            [2.0, 8.0, 5.0, 1.0, 0.5, -4.0, 10.0, 0.0, 1.0, -5.0, 3.0, 0.0, 2.0, 0.0,],
-            [2.0, 0.0, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.0, -2.0, 3.0, 0.0, 1.0, 0.0,],
-            [2.0, 0.0, 1.0, 2.0, 3.0, -1.0, 10.0, 2.0, 0.0, -1.0, 1.0, 2.0, 2.0, 0.0,],
-            [1.0, 1.0, 0.0, 2.0, 2.0, -1.0, 1.0, 2.0, 0.0, -5.0, 1.0, 2.0, 3.0, 0.0,],
-            [3.0, 1.0, 0.0, 3.0, 0.0, -4.0, 10.0, 0.0, 1.0, -5.0, 3.0, 0.0, 3.0, 1.0,],
-            [2.11, 8.0, -6.0, -0.5, 0.0, 1.0, 0.0, 0.0, -3.2, 6.0, 0.5, 0.0, -3.0, 1.0,],
-            [2.11, 8.0, -6.0, -0.5, 0.0, 1.0, 0.0, 0.0, -3.2, 6.0, 1.5, 1.0, -1.0, -1.0,],
-            [2.11, 8.0, -6.0, -0.5, 0.0, 10.0, 0.0, 0.0, -3.2, 6.0, 0.5, 0.0, -1.0, -1.0,],
-            [2.0, 0.0, 5.0, 1.0, 0.5, -2.0, 10.0, 0.0, 1.0, -5.0, 3.0, 1.0, 0.0, -1.0,],
-            [2.0, 0.0, 1.0, 1.0, 1.0, -2.0, 1.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 1.0,],
-            [2.0, 1.0, 1.0, 1.0, 2.0, -1.0, 10.0, 2.0, 0.0, -1.0, 0.0, 2.0, 1.0, 1.0,],
-            [1.0, 1.0, 0.0, 0.0, 1.0, -3.0, 1.0, 2.0, 0.0, -5.0, 1.0, 2.0, 1.0, 1.0,],
-            [3.0, 1.0, 0.0, 1.0, 0.0, -4.0, 1.0, 0.0, 1.0, -2.0, 0.0, 0.0, 1.0, 0.0,]
-        ];
-
-        let targets = array![1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0];
-
-        let dataset = Dataset::new(data, targets);
-        let bootstrapped = RandomForestClassifier::bootstrap_features(&dataset, 10, 10);
-        assert_eq!(bootstrapped.len(), 10);
-        assert!(bootstrapped
-            .iter()
-            .all(|x| x.nsamples() == dataset.nsamples()));
-        assert!(bootstrapped.iter().all(|x| x.nfeatures() == 10));
     }
 
     #[test]

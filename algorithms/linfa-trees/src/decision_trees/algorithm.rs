@@ -6,6 +6,8 @@ use std::hash::{Hash, Hasher};
 
 use linfa::dataset::AsSingleTargets;
 use ndarray::{Array1, ArrayBase, Axis, Data, Ix1, Ix2};
+use ndarray_rand::rand::seq::IteratorRandom;
+use ndarray_rand::rand::thread_rng;
 
 use super::NodeIter;
 use super::Tikz;
@@ -212,6 +214,14 @@ impl<F: Float, L: Label + std::fmt::Debug> TreeNode<F, L> {
         // get targets from dataset
         let target = data.as_single_targets();
 
+        // if the tree is build as a part of random forest, it will have hyperparam `max_features`
+        // randomly pick max_features number of features from all features
+        let mut rng = thread_rng();
+        let max_features = hyperparameters.max_features();
+        let feature_indices = if max_features != None { (0..data.nfeatures())
+            .choose_multiple(&mut rng, hyperparameters.max_features().unwrap()) }
+            else { (0..data.nfeatures()).collect() };
+
         // return empty leaf when we don't have enough samples or the maximal depth is reached
         if (mask.nsamples as f32) < hyperparameters.min_weight_split()
             || hyperparameters
@@ -227,6 +237,11 @@ impl<F: Float, L: Label + std::fmt::Debug> TreeNode<F, L> {
 
         // Iterate over all features
         for (feature_idx, sorted_index) in sorted_indices.iter().enumerate() {
+
+            if !feature_indices.contains(&feature_idx) {
+                continue;
+            }
+
             let mut right_class_freq = parent_class_freq.clone();
             let mut left_class_freq = HashMap::new();
 
