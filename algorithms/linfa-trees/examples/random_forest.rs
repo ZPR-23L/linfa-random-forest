@@ -12,7 +12,7 @@ fn main() -> Result<()> {
         .split_with_ratio(0.8);
 
     println!("Training model with default params...");
-    let default_model = RandomForestClassifier::params().fit(&train)?;
+    let default_model = RandomForestClassifier::params().oob_score(true).fit(&train)?;
     let default_predict = default_model.predict(&test);
     let conf_matrix = default_predict.confusion_matrix(&test)?;
 
@@ -23,6 +23,8 @@ fn main() -> Result<()> {
         100.0 * conf_matrix.accuracy()
     );
 
+    println!("OOB score: {:.2}%", 100.0 * default_model.oob_score().unwrap());
+
     println!("Training model with custom tree params...");
     let trees_params = DecisionTree::params()
         .split_quality(SplitQuality::Gini)
@@ -30,7 +32,9 @@ fn main() -> Result<()> {
         .min_weight_split(1.0)
         .min_weight_leaf(1.0);
     let custom_model = RandomForestClassifier::params()
+        .oob_score(true)
         .trees_params(trees_params)
+        .oob_score(true)
         .fit(&train)?;
     let custom_predict = custom_model.predict(&test);
     let conf_matrix = custom_predict.confusion_matrix(&test)?;
@@ -41,6 +45,8 @@ fn main() -> Result<()> {
         "Test accuracy with custom tree params: {:.2}%",
         100.0 * conf_matrix.accuracy()
     );
+
+    println!("OOB score: {:.2}%", 100.0 * default_model.oob_score().unwrap());
 
     println!("Training decision tree with the same params for comparison...");
     let tree_model = trees_params.fit(&train)?;

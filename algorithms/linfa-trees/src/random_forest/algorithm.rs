@@ -70,34 +70,76 @@ pub struct RandomForestClassifier<F: Float, L: Label> {
 
 impl<F: Float, L: Label> RandomForestClassifier<F, L> {
 
-    fn get_oob_score(&self) -> Option<f64> {
+    pub fn oob_score(&self) -> Option<f64> {
         self.oob_score
+    }
+
+    fn calculate_oob_score<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>
+    (dataset: &DatasetBase<ArrayBase<D, Ix2>, T>, indices: &Vec<Vec<usize>>, trees: &Vec<DecisionTree<F, L>>)
+    -> Option<f64> {
+        // For every sample find all trees that didn't use it for training
+        // At sample's index holds a vector of tree indices that didn't use the sample
+        let mut trees_without_samples = Vec::default();
+        for sample_idx in 0..dataset.nsamples() {
+            let mut trees_without_sample_idx = Vec::default();
+            for tree_idx in 0..indices.len() {
+                if !indices[tree_idx].contains(&sample_idx) {
+                    trees_without_sample_idx.push(tree_idx);
+                }
+            }
+            trees_without_samples.push(trees_without_sample_idx);
+        }
+        
+        let mut correct = 0;
+        
+        // For every sample, make a prediction with trees trained without this sample
+        for sample_idx in 0..dataset.nsamples() {
+            let sample = dataset.records().select(Axis(0), &[sample_idx]);
+            let target = dataset.as_targets().select(Axis(0), &[sample_idx]);
+            let mut predictions = Vec::default();
+
+            for tree_idx in &trees_without_samples[sample_idx] {
+                predictions.extend(trees[*tree_idx].predict(&sample));
+            }
+
+            let predictions = Array::from_vec(predictions);
+            let pred = most_common(predictions);
+
+            // If majority predicted correct label, add to correct predictions counter
+            if &pred == target.get(0).unwrap() { correct += 1; }
+        }
+
+        Some(correct as f64 / dataset.nsamples() as f64)
+    }
+
+    fn bootstrap_indices(nsamples: usize, max_samples: usize) -> Vec<usize> {
+        let mut rng = thread_rng();
+
+        // Sample with replacement
+        let indices = (0..nsamples)
+            .map(|_| rng.gen_range(0..nsamples))
+            .take(max_samples)
+            .collect::<Vec<_>>();
+
+        indices
     }
 
     fn bootstrap<D: Data<Elem = F>, T: AsSingleTargets<Elem = L> + Labels<Elem = L>>(
         dataset: &DatasetBase<ArrayBase<D, Ix2>, T>,
-        num_trees: usize,
-        max_samples: usize,
+        indices: &Vec<Vec<usize>>,
     ) -> Vec<DatasetBase<Array<F, Ix2>, Array<L, Ix1>>> {
         let mut bootstrapped_samples = Vec::new();
 
-        for _ in 0..num_trees {
-            let mut rng = thread_rng();
-
-            // Sample with replacement
-            let indices = (0..dataset.nsamples())
-                .map(|_| rng.gen_range(0..dataset.nsamples()))
-                .take(max_samples)
-                .collect::<Vec<_>>();
-
-            let records = dataset.records().select(Axis(0), &indices);
-            let targets = dataset.as_targets().select(Axis(0), &indices);
+        for i in 0..indices.len() {
+            let records = dataset.records().select(Axis(0), &indices[i]);
+            let targets = dataset.as_targets().select(Axis(0), &indices[i]);
 
             // Create a bootstrapped dataset
             let bootstrapped_dataset = DatasetBase::new(records, targets)
                 .with_feature_names(dataset.feature_names());
             bootstrapped_samples.push(bootstrapped_dataset);
         }
+
         bootstrapped_samples
     }
 }
@@ -112,7 +154,6 @@ where
 
     /// Using specified hyperparameters, fit a random forest on a dataset with a matrix of features and an array of labels
     fn fit(&self, dataset: &DatasetBase<ArrayBase<D, Ix2>, T>) -> Result<Self::Object> {
-        let fitted_trees = Mutex::new(Vec::new());
 
         let num_features = dataset.feature_names().len();
         let max_features = match self.max_features() {
@@ -128,37 +169,48 @@ where
             None => num_samples,
         };
 
+        let indices: Vec<Vec<usize>> = (0..self.num_trees())
+            .map(|_| Self::Object::bootstrap_indices(dataset.nsamples(), max_samples))
+            .collect();
+
         let samples = if self.bootstrap() {
-            Self::Object::bootstrap(&dataset, self.num_trees(), max_samples)} else {
+            Self::Object::bootstrap(&dataset, &indices)} else {
                 vec![DatasetBase::new(
                         dataset.records().to_owned(),
                         dataset.as_targets().to_owned()
                     ).with_feature_names(dataset.feature_names());
                     self.num_trees()]
             };
-
-        let mut oob_score = None;
+        
+        let fitted_trees = Mutex::new(vec![None; self.num_trees()]);
 
         // Using concurrency for fitting trees
         scope(|s| {
-            for sample in samples.iter() {
+            for (i, sample) in samples.iter().enumerate() {
                 let fitted_trees_ref = &fitted_trees; // Borrow a reference to the Mutex
                 s.spawn(move |_| {
                     let tree = self.trees_params()
                         .max_features(Some(max_features))
                         .fit(sample).unwrap();
-
-                    // Lock the Mutex and push the tree into the vector
-                    fitted_trees_ref.lock().unwrap().push(tree);
+        
+                    // Lock the Mutex and insert the tree at the correct index
+                    fitted_trees_ref.lock().unwrap()[i] = Some(tree);
                 });
             }
         });
 
-        let fitted_trees = fitted_trees.into_inner().unwrap();
+        let fitted_trees = fitted_trees.into_inner()
+            .unwrap()
+            .iter()
+            .map(|x| x.clone().unwrap())
+            .collect();
+
+        let oob_score = if self.oob_score() { Self::Object::calculate_oob_score(&dataset, &indices, &fitted_trees) }
+            else { None };
 
         Ok(RandomForestClassifier {
             trees: fitted_trees,
-            oob_score,
+            oob_score: oob_score,
         })
     }
 }
@@ -346,7 +398,8 @@ mod tests {
         let targets = array![1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0];
 
         let dataset = Dataset::new(data, targets);
-        let bootstrapped = RandomForestClassifier::bootstrap(&dataset, 10, 10);
+        let indices = vec![RandomForestClassifier::<f64, usize>::bootstrap_indices(dataset.nsamples(), 10); 10];
+        let bootstrapped = RandomForestClassifier::bootstrap(&dataset, &indices);
         assert_eq!(bootstrapped.len(), 10);
         assert!(bootstrapped.iter().all(|x| x.nsamples() == 10));
     }
@@ -362,7 +415,6 @@ mod tests {
         assert!(classifier_model.is_ok());
         let classifier_model = classifier_model.unwrap();
         assert_eq!(classifier_model.trees.len(), 100);
-        assert!(classifier_model.oob_score.is_none());
     }
 
     #[test]
