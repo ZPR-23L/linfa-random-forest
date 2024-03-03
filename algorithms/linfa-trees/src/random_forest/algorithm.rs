@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 /// that even when the sample size is equal to the size of the dataset, not all samples will be used - there will
 /// be repeats of the same rows. With bootstrapping disabled, all samples will be used to fit every tree.
 ///
-/// Another means of adding random noise to the trees is by randomly selecting the features used to train a tree.
+/// To ensure variability of trees, when creating each tree, at every split only a subset of features is chosen randomly.
 ///
 /// The number of features and samples can be specified as [hyperparameters](crate::RandomForestParams).
 ///
@@ -156,6 +156,7 @@ where
     fn fit(&self, dataset: &DatasetBase<ArrayBase<D, Ix2>, T>) -> Result<Self::Object> {
 
         let num_features = dataset.feature_names().len();
+
         let max_features = match self.max_features() {
             MaxFeatures::Sqrt => f64::sqrt(num_features as f64) as usize,
             MaxFeatures::Log2 => f64::log2(num_features as f64) as usize,
@@ -164,6 +165,7 @@ where
         };
 
         let num_samples = dataset.records().len();
+
         let max_samples = match self.max_samples() {
             Some(n) => std::cmp::max(1, ((num_samples as f32) * n) as usize),
             None => num_samples,
@@ -191,7 +193,8 @@ where
                 s.spawn(move |_| {
                     let tree = self.trees_params()
                         .max_features(Some(max_features))
-                        .fit(sample).unwrap();
+                        .fit(sample)
+                        .unwrap();
         
                     // Lock the Mutex and insert the tree at the correct index
                     fitted_trees_ref.lock().unwrap()[i] = Some(tree);
